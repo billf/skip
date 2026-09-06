@@ -1,0 +1,89 @@
+import { createCollection } from "@tanstack/db";
+import type { CollectionConfig } from "@tanstack/db";
+import type { ProjectSummary } from "../shared/model.js";
+
+type SkipEntry = [string, ProjectSummary[]];
+
+const config: CollectionConfig<ProjectSummary, string> = {
+  id: "skip-project-summaries",
+  getKey: (summary) => summary.id,
+  sync: {
+    rowUpdateMode: "full",
+    sync: ({ begin, write, commit, truncate, markReady, markError }) => {
+      let disposed = false;
+      let source: EventSource | undefined;
+      let streamId: string | undefined;
+      let ready = false;
+      const current = new Map<string, ProjectSummary>();
+
+      const apply = (event: MessageEvent<string>, initial: boolean) => {
+        const entries = JSON.parse(event.data) as SkipEntry[];
+        begin();
+        if (initial) {
+          truncate();
+          current.clear();
+        }
+        for (const [key, values] of entries) {
+          if (values.length === 0) {
+            write({ type: "delete", key });
+            current.delete(key);
+          } else if (values.length === 1) {
+            const value = values[0]!;
+            write({ type: current.has(key) ? "update" : "insert", value });
+            current.set(key, value);
+          } else {
+            throw new Error(`Expected one Skip value for ${key}`);
+          }
+        }
+        void commit();
+        if (initial) {
+          ready = true;
+          markReady();
+        }
+      };
+      const receive = (event: MessageEvent<string>, initial: boolean) => {
+        try {
+          apply(event, initial);
+        } catch (error) {
+          if (ready) console.error("Invalid Skip update", error);
+          else markError(error);
+        }
+      };
+
+      void (async () => {
+        const response = await fetch(
+          "/skip-control/v1/streams/projectSummaries",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          },
+        );
+        if (!response.ok)
+          throw new Error(`Skip control API: ${response.status}`);
+        streamId = await response.text();
+        if (disposed) {
+          await fetch(`/skip-control/v1/streams/${streamId}`, {
+            method: "DELETE",
+          });
+          return;
+        }
+        source = new EventSource(`/skip-stream/v1/streams/${streamId}`);
+        source.addEventListener("init", (event) => receive(event, true));
+        source.addEventListener("update", (event) => receive(event, false));
+      })().catch(markError);
+
+      return () => {
+        disposed = true;
+        source?.close();
+        if (streamId !== undefined) {
+          void fetch(`/skip-control/v1/streams/${streamId}`, {
+            method: "DELETE",
+          });
+        }
+      };
+    },
+  },
+};
+
+export const projectSummaries = createCollection(config);
