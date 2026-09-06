@@ -35,7 +35,7 @@
 
   # Kafka event store
   kafka:
-    image: apache/kafka:4.1.1
+    image: apache/kafka:4.3.1@sha256:77e3df9054047a88b520d0cc46e16696d3b22022e1d580aeccd2632df6532837
     command: sh -c "((sleep 5 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --topic skip-chatroom-messages && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --topic skip-chatroom-likes)&) && touch /opt/kafka/config/log4j.properties && sed -i 's/INFO/WARN/g' /opt/kafka/config/log4j.properties && /etc/kafka/docker/run"
     ports:
       - "19092:19092"
