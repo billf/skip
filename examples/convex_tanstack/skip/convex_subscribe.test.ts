@@ -113,24 +113,28 @@ test("subscribe rejects and cleans up when the initial delivery fails", async ()
   assert.equal(sink.batches.at(-1)!.isInitial, true);
 });
 
-test("a rejected update does not advance the snapshot mirror", async () => {
+test("a rejected update re-subscribes instead of waiting for a change", async () => {
   const fake = new FakeConvex();
   const sink = recorder();
   const pending = service(fake).subscribe("i1", "rows", {}, sink.callbacks);
   fake.push([{ key: "a", value: 1 }]);
   await pending;
 
-  // Skip refuses this batch, so it never saw b.
+  // Skip refuses this batch, so it never saw b. Convex will not re-deliver an
+  // unchanged result, so waiting would leave the projection stale forever on a
+  // dataset that goes quiet -- the adapter must tear down and re-establish.
   sink.rejectNext();
   fake.push([
     { key: "a", value: 1 },
     { key: "b", value: 2 },
   ]);
   await settle();
-  assert.equal(sink.errors.length, 1);
 
-  // The next snapshot must re-offer b. If the mirror had advanced past the
-  // rejected batch, b would be treated as already delivered and lost forever.
+  assert.equal(sink.errors.length, 1);
+  assert.equal(fake.unsubscribed, 1, "should have detached the subscription");
+
+  // The re-established subscription delivers a full initial batch, so the rows
+  // lost with the rejected batch are recovered without needing a data change.
   fake.push([
     { key: "a", value: 1 },
     { key: "b", value: 2 },
@@ -138,8 +142,48 @@ test("a rejected update does not advance the snapshot mirror", async () => {
   await settle();
 
   const last = sink.batches.at(-1)!;
-  assert.equal(last.isInitial, false);
-  assert.deepEqual(last.updates, [["b", [{ key: "b", value: 2 }]]]);
+  assert.equal(last.isInitial, true, "recovery batch replaces Skip's state");
+  assert.deepEqual(
+    new Map(last.updates),
+    new Map([
+      ["a", [{ key: "a", value: 1 }]],
+      ["b", [{ key: "b", value: 2 }]],
+    ]),
+  );
+});
+
+test("a released instance drops deliveries queued behind teardown", async () => {
+  const fake = new FakeConvex();
+  const sink = recorder();
+  const convex = service(fake);
+  const pending = convex.subscribe("i1", "rows", {}, sink.callbacks);
+  fake.push([{ key: "a", value: 1 }]);
+  await pending;
+  const delivered = sink.batches.length;
+
+  // Skip destroys the collection, then a queued Convex snapshot lands. Writing
+  // it would throw into the error path on every clean teardown under load.
+  convex.unsubscribe("i1");
+  fake.push([{ key: "a", value: 2 }]);
+  await settle();
+
+  assert.equal(sink.batches.length, delivered, "no write after release");
+  assert.deepEqual(sink.errors, [], "and no spurious error");
+});
+
+test("shutdown drains an in-flight delivery before closing", async () => {
+  const fake = new FakeConvex();
+  const sink = recorder();
+  const convex = service(fake);
+  const pending = convex.subscribe("i1", "rows", {}, sink.callbacks);
+  fake.push([{ key: "a", value: 1 }]);
+  await pending;
+
+  await convex.shutdown();
+
+  assert.equal(fake.unsubscribed, 1);
+  assert.equal(fake.closed, 1);
+  assert.deepEqual(sink.errors, []);
 });
 
 test("a reconnect snapshot re-diffs instead of replaying everything", async () => {
