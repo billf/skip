@@ -1,12 +1,58 @@
 # Using Convex with Skip: findings and plan
 
+## What this document is
+
+A record of what was tried at one integration layer, and a plan for what a real
+deployment would need. Three scope statements a reader should have before the
+conclusions below:
+
+- **It evaluates Convex's TypeScript client only.** Everything here rests on
+  `ConvexClient.onUpdate`. Convex also ships an open-source backend and clients
+  in other languages, and this document does not evaluate them. Where it says
+  "Convex", read "Convex through its TypeScript client".
+- **The demo is a mechanism demonstration, not a recommendation.** Its
+  projection -- per-project task counts and effort sums over one Convex source --
+  is deliberately below the threshold the Conclusion sets for using Skip at all,
+  chosen so the boundary is legible rather than because it justifies the second
+  reactive hop. A Convex-only implementation of this exact demo would be simpler
+  and faster. The demo shows the boundary works; it does not show it is worth
+  crossing.
+- **The production plan describes work on the Skip repository**, not on this
+  example, and it is a maintainer roadmap rather than a commitment. A downstream
+  adopter should read it as a checklist of what they will have to solve, not as
+  a list of things Skip already provides.
+
 ## Conclusion
 
 Convex can replace PostgreSQL as the source of truth in a Skip example, but it
 is not a drop-in SQL adapter. Convex owns the database *and* the transactional
-function API. Skip must subscribe through a public Convex query and should remain
-a downstream derived-data system; writes go to Convex mutations, never to a
-shadow Skip input collection.
+function API. **At the TypeScript-client layer** Skip must subscribe through a
+public Convex query, and it should remain a downstream derived-data system;
+writes go to Convex mutations, never to a shadow Skip input collection.
+
+That first constraint is a property of the layer, not of Convex. The sync
+protocol carries whole query results -- `QueryUpdated` in
+`convex/browser/sync/protocol` delivers `value: JSONValue`, the entire
+re-evaluated result, with no row-level deltas anywhere -- so any client speaking
+it, in any language, receives snapshots and must diff them to recover deltas.
+
+This was checked against a second implementation rather than inferred from the
+TypeScript declarations alone, because those declarations describe what one
+client decodes and not what the server can emit: in the same file,
+`ServerMessage` is a strict subset of `WireServerMessage`. Convex's Rust client
+(`get-convex/convex-rs`, crate `convex_sync_types`, commit `dfc822f1`) decodes
+the full wire set -- seven `ServerMessage` variants including `TransitionChunk`
+and `Ping` -- and still declares no delta-shaped message. Its `StateModification`
+matches the TypeScript one, its `QueryUpdated` carries a single whole `value`,
+and its client applies that value by full replacement. No `ClientMessage` field
+requests deltas or partial results. Rewriting the adapter against a
+non-TypeScript client would therefore change nothing here.
+
+A genuinely lower-layer integration would have to target a
+different Convex surface (the open-source backend's subscription machinery, or
+the cursor-based streaming-export API), which this document does not evaluate.
+Whether the snapshot layer is the intended long-term transport is still open;
+see `~/plans/convex-skip-integration.md`.
 
 This is worth the extra system boundary when Skip is maintaining a shared,
 incremental projection that is expensive or awkward to reproduce per client,
