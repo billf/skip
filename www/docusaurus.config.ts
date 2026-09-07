@@ -116,6 +116,28 @@ const config: Config = {
     [
       "docusaurus-plugin-typedoc",
       {
+        id: "adapters/convex",
+        out: "docs/api/adapters/convex",
+        entryPoints: ["../skipruntime-ts/adapters/convex/src/index.ts"],
+        tsconfig: "../skipruntime-ts/adapters/convex/tsconfig.json",
+        readme: "none",
+        indexFormat: "table",
+        disableSources: true,
+        groupOrder: ["Type Aliases", "Interfaces", "Classes", "functions"],
+        sidebar: { pretty: true },
+        textContentMappings: {
+          "title.indexPage": "@skip-adapter/convex",
+          "title.memberPage": "{name}",
+        },
+        parametersFormat: "table",
+        enumMembersFormat: "table",
+        useCodeBlocks: true,
+        useHTMLEncodedBrackets: true,
+      },
+    ],
+    [
+      "docusaurus-plugin-typedoc",
+      {
         id: "core",
         out: "docs/api/core",
         entryPoints: ["../skipruntime-ts/core/src/api.ts"],

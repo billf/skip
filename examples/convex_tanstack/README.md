@@ -14,10 +14,15 @@ Requirements: Node.js 22.12 or newer (the floor TanStack Start declares) and a
 Convex account (or a configured local Convex deployment).
 
 ```sh
-cd examples/convex_tanstack
+cd ../..
 npm install
+npm run build
+cd examples/convex_tanstack
 npm run dev
 ```
+
+This example is a root npm workspace. Install dependencies from the repository
+root, then run its commands from this directory.
 
 The first run configures Convex, writes `.env.local`, and then launches the Skip
 service and TanStack Start. Open <http://localhost:3000> and select **Seed example
@@ -46,8 +51,8 @@ adapter (for example Nitro) to serve it.
 - `src/skip_collection.ts` is a small custom TanStack DB sync adapter. Skip's
   `init` event becomes an atomic truncate-and-insert transaction; later SSE
   events become insert/update/delete transactions.
-- `skip/convex_external_service.ts` is the server-side Convex subscription
-  adapter; it is deliberately separate from the browser's React Query client.
+- `@skip-adapter/convex` is the server-side Convex subscription adapter; it is
+  deliberately separate from the browser's React Query client.
 
 The larger design and rollout plan is in
 [the native example's DESIGN.md](../convex_reactive/DESIGN.md).

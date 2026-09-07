@@ -50,8 +50,10 @@ non-TypeScript client would therefore change nothing here.
 A genuinely lower-layer integration would have to target a
 different Convex surface (the open-source backend's subscription machinery, or
 the cursor-based streaming-export API), which this document does not evaluate.
-Whether the snapshot layer is the intended long-term transport is still open;
-see `~/plans/convex-skip-integration.md`.
+The snapshot layer is the explicit v1 transport: it re-establishes a fresh
+snapshot after restart or delivery failure and makes no durable delta-replay
+promise. A separately documented lower-layer discovery spike may evaluate
+cursor-based transport without changing this adapter's v1 contract.
 
 This is worth the extra system boundary when Skip is maintaining a shared,
 incremental projection that is expensive or awkward to reproduce per client,
@@ -138,19 +140,17 @@ Other deliberate limitations:
 - The query *and the mutations* are public and unauthenticated. A real service
   needs a narrowly scoped service identity or a query that exposes only data safe
   for this backend, and identity checks on every client-callable mutation.
-- A rejected `callbacks.update` is recovered only by the next Convex snapshot,
-  and Convex does not re-deliver an unchanged query result. So a transient Skip
-  write failure on a dataset that then goes quiet leaves the projection stale
-  indefinitely, with a log line as the only trace. The adapter deliberately does
-  not advance its mirror past a batch Skip rejected -- which is what makes the
-  next snapshot recover it -- but that is a repair mechanism, not a liveness
-  guarantee. Production wants teardown and resubscribe on update failure, so the
-  next delivery is a fresh initial batch.
+- A rejected `callbacks.update` tears down and re-establishes the Convex
+  subscription, resetting the adapter mirror so the next delivery is a fresh
+  initial batch. This restores a quiet dataset without waiting for another
+  source write, but it is snapshot recovery rather than a durable replay log.
 - The Skip control and streaming listeners bind all interfaces (see the control
   API section below), so an unfirewalled dev machine exposes them to its whole
   local network.
-- The in-memory previous snapshot is rebuilt after a Skip process restart. There
-  is no durable resume token shared across Convex and Skip.
+- The in-memory previous snapshot is rebuilt after a Skip process restart.
+  Convex's observed timestamp is a causal-consistency watermark, not a durable
+  query replay cursor, so this adapter deliberately establishes a fresh initial
+  snapshot instead of claiming delta resume.
 - The handwritten `_generated` files let a clean scaffold typecheck; `convex dev`
   owns and regenerates them.
 - The examples do not use actions because there is no external side effect. If
@@ -253,6 +253,14 @@ which is exactly what rule 1 forbids.
 
 ## Production plan
 
+Before adding parameterised or bounded resources, define the tenant boundary.
+One production adapter instance has one immutable tenant scope and one trusted
+Convex service identity. The gateway authorizes a caller before minting a stream,
+the resource parser rejects a caller-supplied tenant, and the Convex query checks
+both the identity and that the requested project belongs to the configured
+tenant. End-user token propagation and shared multi-tenant adapter instances are
+not part of this v1 shape.
+
 1. Extract the Convex adapter into a versioned package. Land as
    `@skip-adapter/convex` at `skipruntime-ts/adapters/convex`, versioned in
    lockstep with `@skipruntime/core` and pinning it exactly, and register it in
@@ -263,22 +271,19 @@ which is exactly what rule 1 forbids.
    `@skip-adapter/postgres` occupies. Omitting the Makefile target ships a
    release without the adapter and nothing fails loudly.
 
-   **Fold step 2's parameterisation into this step, before anything is
-   published.** `ConvexReactiveResource` fixes `args` at construction and
-   `subscribe` ignores its `params` argument, so every instance of a resource
-   subscribes to the identical query -- which makes step 2 unreachable without
-   breaking an already-released API. Skip already derives distinct external
-   collection instances from `(supplier, resource, params)`; the adapter throws
-   that away. Make the resource definition a factory over subscription params,
-   validated the way `@skip-adapter/postgres` validates its required
-   `params.key`, and give the Convex query declared `args` for the partition key.
+   **Parameterisation is part of the initial API.** `subscribe` continues to
+   receive `Json`, as required by `ExternalService`; each resource supplies a
+   named `argsFromParams` parser returning the generated
+   `FunctionArgs<Query>`. It validates every field, rejects tenant overrides,
+   and constructs the complete Convex argument object from the immutable scope
+   and allowed subscription parameters. Do not use a generic
+   `Record<string, Value>` argument bag or default-argument merging.
 
    Still genuinely new work in this step: typed resource factories, schema
    validation, structured logging, and delivery latency metrics. Two items
    originally listed here are done -- row comparison is structural rather than
    `JSON.stringify`, and reconnect, callback-failure, unsubscribe and shutdown
-   coverage exists in `skip/convex_subscribe.test.ts` in both examples; carry
-   that suite into the package rather than rewriting it.
+   coverage lives with the adapter package.
 
    Two contracts the extraction must state that the example never had to:
    - **Value domain.** Convex `Value` includes `bigint` (`v.int64`) and
@@ -293,9 +298,11 @@ which is exactly what rule 1 forbids.
      per-instance setup and teardown against the delivery chain, as
      `@skip-adapter/postgres` does with `chainInstanceOp`, and drop late
      deliveries for a released instance rather than reporting them as errors.
-2. Replace the whole-workspace query with bounded partitions (for example one
-   tenant or project per resource instance), using the parameterised resource API
-   from step 1. Set and test hard cardinality and result-size limits, and specify
+2. Add the authenticated tenant-scoped query and gateway before exposing bounded
+   partitions. Replace the whole-workspace query with bounded partitions (for
+   example one project per resource instance within the adapter's fixed tenant),
+   using the parameterised resource API from step 1. Set and test hard
+   cardinality and result-size limits, and specify
    that exceeding one **fails the subscription loudly rather than truncating**:
    the adapter cannot distinguish a truncated snapshot from mass deletion, so a
    capped query reaches Skip as real deletions and produces confidently wrong
@@ -310,8 +317,8 @@ which is exactly what rule 1 forbids.
    either order. Require that a partition key is immutable for a row's lifetime
    and that every Skip aggregate is computable within one partition; cross-
    partition aggregation is out of scope for this integration shape.
-4. Add authentication and authorization **on both sides of the boundary**. On
-   Convex, gate every client-callable mutation on `ctx.auth.getUserIdentity()`
+4. Complete authentication and authorization **on both sides of the boundary**.
+   On Convex, gate every client-callable mutation on `ctx.auth.getUserIdentity()`
    and demote anything that should never be browser-reachable to
    `internalQuery` / `internalMutation` -- the demo's `seed`, `addTask` and
    `advanceTask` are public `mutation`s and `VITE_CONVEX_URL` ships in the
@@ -333,3 +340,16 @@ which is exactly what rule 1 forbids.
 7. Compare the result with a Convex-only implementation. Keep Skip only where
    its incremental/multi-source/server-shared computation justifies the second
    reactive hop.
+
+## Lower-layer replay discovery spike
+
+This v1 adapter is not blocked on a lower-layer transport. Timebox investigation
+to one engineer-week: inspect the supported backend/export surfaces, prototype a
+tenant-authenticated cursor consumer, and exercise bootstrap, disconnect,
+duplicate, gap, retention, and compaction cases. The spike must answer whether a
+supported API supplies ordered document changes with durable cursors, whether it
+can recreate the query's tenant-scoped semantics without a bootstrap gap, and
+what state/retention it requires. A viable production replay adapter is expected
+to require roughly four to eight further engineer-weeks plus persistent cursor
+storage, monitoring, and operational support; that estimate is intentionally
+low-confidence until the spike completes.
