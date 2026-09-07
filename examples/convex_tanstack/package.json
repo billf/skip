@@ -14,7 +14,7 @@
     "web:dev": "vite dev",
     "build": "npm run typecheck && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test skip/convex_external_service.test.ts"
+    "test": "tsx --test skip/*.test.ts"
   },
   "dependencies": {
     "@convex-dev/react-query": "^0.1.0",

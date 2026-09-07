@@ -16,8 +16,8 @@ import type {
 } from "../shared/model.js";
 import { ConvexExternalService } from "./convex_external_service.js";
 
-type TaskTotals = { totalTasks: number; openTasks: number; openEffort: number };
-const emptyTotals: TaskTotals = { totalTasks: 0, openTasks: 0, openEffort: 0 };
+export type TaskTotals = { totalTasks: number; openTasks: number; openEffort: number };
+export const emptyTotals: TaskTotals = { totalTasks: 0, openTasks: 0, openEffort: 0 };
 
 class ProjectsOnly implements Mapper<string, WorkspaceRow, string, Project> {
   mapEntry(
@@ -34,7 +34,7 @@ class TasksOnly implements Mapper<string, WorkspaceRow, string, Task> {
     return row.kind === "task" ? [[row.task.id, row.task]] : [];
   }
 }
-class TasksByProject implements Mapper<string, Task, string, TaskTotals> {
+export class TasksByProject implements Mapper<string, Task, string, TaskTotals> {
   mapEntry(_key: string, tasks: Values<Task>): Iterable<[string, TaskTotals]> {
     const task = tasks.getUnique();
     const open = task.status === "done" ? 0 : 1;
@@ -46,7 +46,7 @@ class TasksByProject implements Mapper<string, Task, string, TaskTotals> {
     ];
   }
 }
-class AddTaskTotals implements Reducer<TaskTotals, TaskTotals> {
+export class AddTaskTotals implements Reducer<TaskTotals, TaskTotals> {
   initial = emptyTotals;
   add(accum: TaskTotals | null, value: TaskTotals): TaskTotals {
     const current = accum ?? emptyTotals;
