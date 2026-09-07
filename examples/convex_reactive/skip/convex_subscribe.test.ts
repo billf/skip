@@ -72,10 +72,19 @@ function recorder() {
   };
 }
 
-function service(fake: FakeConvex) {
-  return new ConvexExternalService<Row>(fake.asSubscriber(), {
-    rows: { query, args: {}, getKey: (row) => row.key },
-  });
+function service(
+  fake: FakeConvex,
+  options: {
+    closeClient?: boolean;
+    maxResubscribeAttempts?: number;
+    resubscribeBackoffMs?: number;
+  } = {},
+) {
+  return new ConvexExternalService<Row>(
+    fake.asSubscriber(),
+    { rows: { query, args: {}, getKey: (row) => row.key } },
+    options,
+  );
 }
 
 /** Lets the queued delivery chain drain before assertions. */
@@ -84,7 +93,12 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 test("subscribe resolves once the initial snapshot is delivered", async () => {
   const fake = new FakeConvex();
   const sink = recorder();
-  const pending = service(fake).subscribe("i1", "rows", {}, sink.callbacks);
+  const pending = service(fake, { resubscribeBackoffMs: 0 }).subscribe(
+    "i1",
+    "rows",
+    {},
+    sink.callbacks,
+  );
 
   fake.push([{ key: "a", value: 1 }]);
   await pending;
@@ -116,7 +130,12 @@ test("subscribe rejects and cleans up when the initial delivery fails", async ()
 test("a rejected update re-subscribes instead of waiting for a change", async () => {
   const fake = new FakeConvex();
   const sink = recorder();
-  const pending = service(fake).subscribe("i1", "rows", {}, sink.callbacks);
+  const pending = service(fake, { resubscribeBackoffMs: 0 }).subscribe(
+    "i1",
+    "rows",
+    {},
+    sink.callbacks,
+  );
   fake.push([{ key: "a", value: 1 }]);
   await pending;
 
@@ -171,7 +190,7 @@ test("a released instance drops deliveries queued behind teardown", async () => 
   assert.deepEqual(sink.errors, [], "and no spurious error");
 });
 
-test("shutdown drains an in-flight delivery before closing", async () => {
+test("shutdown drains an in-flight delivery without closing an injected client", async () => {
   const fake = new FakeConvex();
   const sink = recorder();
   const convex = service(fake);
@@ -182,8 +201,21 @@ test("shutdown drains an in-flight delivery before closing", async () => {
   await convex.shutdown();
 
   assert.equal(fake.unsubscribed, 1);
-  assert.equal(fake.closed, 1);
+  assert.equal(fake.closed, 0);
   assert.deepEqual(sink.errors, []);
+});
+
+test("shutdown closes an injected client only when requested", async () => {
+  const fake = new FakeConvex();
+  const sink = recorder();
+  const convex = service(fake, { closeClient: true });
+  const pending = convex.subscribe("i1", "rows", {}, sink.callbacks);
+  fake.push([]);
+  await pending;
+
+  await convex.shutdown();
+
+  assert.equal(fake.closed, 1);
 });
 
 test("a reconnect snapshot re-diffs instead of replaying everything", async () => {
@@ -270,7 +302,7 @@ test("unsubscribe releases the Convex subscription once", async () => {
 test("shutdown releases every subscription and closes the client", async () => {
   const fake = new FakeConvex();
   const sink = recorder();
-  const convex = service(fake);
+  const convex = service(fake, { closeClient: true });
   const first = convex.subscribe("i1", "rows", {}, sink.callbacks);
   fake.push([]);
   await first;
