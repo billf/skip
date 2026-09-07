@@ -144,6 +144,11 @@ Other deliberate limitations:
   subscription, resetting the adapter mirror so the next delivery is a fresh
   initial batch. This restores a quiet dataset without waiting for another
   source write, but it is snapshot recovery rather than a durable replay log.
+  Convex redelivers a cached result the moment a subscription is re-established,
+  so recovery is bounded: capped exponential backoff, and after
+  `maxResubscribeAttempts` consecutive failures the subscription goes inert and
+  reports through `onInert`. Without the bound, a persistently failing Skip
+  would be a hot loop.
 - The Skip control and streaming listeners bind all interfaces (see the control
   API section below), so an unfirewalled dev machine exposes them to its whole
   local network.
