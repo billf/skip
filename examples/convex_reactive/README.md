@@ -31,9 +31,16 @@ npm run web:dev
 ```
 
 Run `npm test`, `npm run typecheck`, and `npm run build` for local verification.
-The Vite proxy is development-only; a deployed version needs a gateway routing
-the two Skip HTTP/SSE ports under the same public origin (or an equivalent CORS
-configuration).
+
+> **The Vite proxy is development-only, and not just for performance reasons.**
+> It forwards Skip's entire *control* API (port 8081) to the browser, including
+> `PATCH /v1/inputs/:collection`, which writes. That is fine against a localhost
+> listener and unsafe behind a public origin. A deployment should expose only the
+> streaming port's `GET /v1/streams/:uuid` and mint stream UUIDs from its own
+> authenticated endpoint; CORS is not a substitute, since it constrains
+> cooperative pages rather than direct requests. See
+> [DESIGN.md](./DESIGN.md#the-skip-control-api-is-not-a-browser-facing-surface)
+> for the full reasoning and `examples/hackernews` for a worked gateway split.
 
 ## What to inspect
 
