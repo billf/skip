@@ -20,6 +20,7 @@ const query = {} as FunctionReference<"query">;
 class FakeConvex {
   push: (rows: Row[]) => void = () => {};
   fail: (error: Error) => void = () => {};
+  subscriptions = 0;
   unsubscribed = 0;
   closed = 0;
 
@@ -31,6 +32,7 @@ class FakeConvex {
         callback: (rows: Row[]) => unknown,
         onError?: (error: Error) => unknown,
       ) => {
+        this.subscriptions += 1;
         this.push = (rows) => void callback(rows);
         this.fail = (error) => void onError?.(error);
         return () => {
@@ -90,6 +92,14 @@ function service(
 /** Lets the queued delivery chain drain before assertions. */
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.fail("timed out waiting for the expected subscription state");
+}
+
 test("subscribe resolves once the initial snapshot is delivered", async () => {
   const fake = new FakeConvex();
   const sink = recorder();
@@ -127,6 +137,30 @@ test("subscribe rejects and cleans up when the initial delivery fails", async ()
   assert.equal(sink.batches.at(-1)!.isInitial, true);
 });
 
+test("a rejected initial snapshot re-subscribes until Skip accepts it", async () => {
+  const fake = new FakeConvex();
+  const sink = recorder();
+  const convex = service(fake, { resubscribeBackoffMs: 0 });
+  const pending = convex.subscribe("i1", "rows", {}, sink.callbacks);
+
+  sink.rejectNext();
+  fake.push([{ key: "a", value: 1 }]);
+  await waitFor(() => fake.subscriptions === 2);
+
+  assert.equal(fake.unsubscribed, 1, "should replace the failed bootstrap");
+
+  fake.push([{ key: "a", value: 1 }]);
+  await pending;
+
+  assert.equal(sink.errors.length, 1);
+  assert.deepEqual(sink.batches, [
+    {
+      updates: [["a", [{ key: "a", value: 1 }]]],
+      isInitial: true,
+    },
+  ]);
+});
+
 test("a rejected update re-subscribes instead of waiting for a change", async () => {
   const fake = new FakeConvex();
   const sink = recorder();
@@ -147,7 +181,7 @@ test("a rejected update re-subscribes instead of waiting for a change", async ()
     { key: "a", value: 1 },
     { key: "b", value: 2 },
   ]);
-  await settle();
+  await waitFor(() => fake.subscriptions === 2);
 
   assert.equal(sink.errors.length, 1);
   assert.equal(fake.unsubscribed, 1, "should have detached the subscription");

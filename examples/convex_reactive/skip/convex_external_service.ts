@@ -182,7 +182,11 @@ export class ConvexExternalService<Row extends Json>
       rejectInitial = reject;
     });
 
-    const reportError = (error: unknown, sourceGeneration?: number) => {
+    const reportError = (
+      error: unknown,
+      sourceGeneration?: number,
+      shouldRejectInitial = true,
+    ) => {
       // A generation-tagged error from a subscription this instance already
       // replaced is stale, not new information.
       if (sourceGeneration !== undefined && sourceGeneration !== generation) {
@@ -192,7 +196,7 @@ export class ConvexExternalService<Row extends Json>
       // or the failure leaves no trace at all.
       this.logger.error("Convex external service error", error);
       callbacks.error(error);
-      if (!initialSettled) rejectInitial(error);
+      if (!initialSettled && shouldRejectInitial) rejectInitial(error);
     };
 
     // Convex re-delivers a query result only when its read set changes, so a
@@ -261,8 +265,11 @@ export class ConvexExternalService<Row extends Json>
         })
         .catch((error: unknown) => {
           if (released || sourceGeneration !== generation) return;
-          reportError(error, sourceGeneration);
-          if (initialSettled) resubscribe();
+          // A rejected initial batch is recoverable just like a later one:
+          // retain the pending subscribe call and replace the Convex
+          // subscription so a quiet query result is delivered again.
+          reportError(error, sourceGeneration, false);
+          resubscribe();
         });
     };
 
