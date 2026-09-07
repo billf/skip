@@ -85,6 +85,9 @@ export class ConvexExternalService<Row extends Json>
       rejectInitial = reject;
     });
     const reportError = (error: unknown) => {
+      // Skip binds an external service's error channel to a no-op, so log here
+      // or the failure leaves no trace at all.
+      console.error("Convex external service error", error);
       callbacks.error(error);
       if (!initialSettled) rejectInitial(error);
     };
@@ -92,13 +95,16 @@ export class ConvexExternalService<Row extends Json>
       resource.query,
       resource.args,
       (rows: Row[]) => {
-        const result = diffSnapshot(current, rows, resource.getKey);
-        current = result.next;
         const isInitial = !initialQueued;
         initialQueued = true;
+        // Diff and advance `current` inside the delivery chain: the mirror must
+        // only move to a snapshot Skip actually accepted, or a rejected batch is
+        // never retransmitted and the projection stays stale forever.
         delivery = delivery
-          .then(() => callbacks.update(result.updates, isInitial))
-          .then(() => {
+          .then(async () => {
+            const result = diffSnapshot(current, rows, resource.getKey);
+            await callbacks.update(result.updates, isInitial);
+            current = result.next;
             if (isInitial) {
               initialSettled = true;
               resolveInitial();
