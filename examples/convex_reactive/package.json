@@ -13,9 +13,10 @@
     "web:dev": "vite",
     "build": "npm run typecheck && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test skip/*.test.ts"
+    "test": "tsx --test skip/service.test.ts"
   },
   "dependencies": {
+    "@skip-adapter/convex": "0.0.23",
     "@skipruntime/core": "^0.0.23",
     "@skipruntime/server": "^0.0.23",
     "@skipruntime/wasm": "^0.0.23",
