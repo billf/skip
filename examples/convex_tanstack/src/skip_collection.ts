@@ -71,6 +71,15 @@ const config: CollectionConfig<ProjectSummary, string> = {
         source = new EventSource(`/skip-stream/v1/streams/${streamId}`);
         source.addEventListener("init", (event) => receive(event, true));
         source.addEventListener("update", (event) => receive(event, false));
+        source.onerror = () => {
+          // EventSource retries on its own; only a CLOSED socket is fatal. Skip
+          // 404s a stale stream id after a restart, which lands here -- without
+          // this the collection would keep serving stale rows with isError false.
+          if (source?.readyState !== EventSource.CLOSED) return;
+          const error = new Error("Skip event stream disconnected");
+          if (ready) console.error(error);
+          else markError(error);
+        };
       })().catch(markError);
 
       return () => {

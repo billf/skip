@@ -39,6 +39,9 @@ export function useProjectSummaries(): {
         return next;
       });
       setLoading(false);
+      // EventSource reconnects on its own, so a delivered event means the stream
+      // recovered -- clear any banner left by the drop that preceded it.
+      setError(null);
     };
     const receive = (event: MessageEvent<string>, replace: boolean) => {
       try {
@@ -69,9 +72,14 @@ export function useProjectSummaries(): {
       source = new EventSource(`/skip-stream/v1/streams/${streamId}`);
       source.addEventListener("init", (event) => receive(event, true));
       source.addEventListener("update", (event) => receive(event, false));
-      source.onerror = () =>
+      source.onerror = () => {
+        // Only a CLOSED socket is fatal; transient drops are retried and clear
+        // themselves on the next delivered event.
+        if (source?.readyState !== EventSource.CLOSED) return;
         setError(new Error("Skip event stream disconnected"));
+      };
     })().catch((reason: unknown) => {
+      if (disposed) return;
       setError(reason instanceof Error ? reason : new Error(String(reason)));
       setLoading(false);
     });

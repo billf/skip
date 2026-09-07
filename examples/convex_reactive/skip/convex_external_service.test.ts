@@ -11,10 +11,15 @@ test("diffSnapshot emits inserts, changes, and deletions", () => {
     ],
     (row) => row.key,
   );
-  assert.deepEqual(initial.updates, [
-    ["a", [{ key: "a", value: 1 }]],
-    ["b", [{ key: "b", value: 2 }]],
-  ]);
+  // Compare as a Map: Entry<K, V> carries no ordering contract, so asserting on
+  // array order would pin diffSnapshot's iteration rather than its behaviour.
+  assert.deepEqual(
+    new Map(initial.updates),
+    new Map([
+      ["a", [{ key: "a", value: 1 }]],
+      ["b", [{ key: "b", value: 2 }]],
+    ]),
+  );
 
   const changed = diffSnapshot(
     initial.next,
@@ -24,10 +29,13 @@ test("diffSnapshot emits inserts, changes, and deletions", () => {
     ],
     (row) => row.key,
   );
-  assert.deepEqual(changed.updates, [
-    ["c", [{ key: "c", value: 3 }]],
-    ["b", []],
-  ]);
+  assert.deepEqual(
+    new Map(changed.updates),
+    new Map([
+      ["c", [{ key: "c", value: 3 }]],
+      ["b", []],
+    ]),
+  );
 });
 
 test("diffSnapshot rejects duplicate keys", () => {
