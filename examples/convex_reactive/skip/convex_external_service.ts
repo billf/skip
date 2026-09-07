@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { Entry, ExternalService, Json } from "@skipruntime/core";
 import { SkipUnknownResourceError } from "@skipruntime/core";
 import { ConvexClient } from "convex/browser";
@@ -12,6 +13,13 @@ export type ConvexReactiveResource<Row extends Json> = {
   getKey: (row: Row) => string;
 };
 
+/**
+ * The part of `ConvexClient` this adapter uses. Accepting the interface rather
+ * than the class lets the subscription lifecycle be tested without a
+ * deployment.
+ */
+export type ConvexSubscriber = Pick<ConvexClient, "onUpdate" | "close">;
+
 export function diffSnapshot<Row extends Json>(
   previous: ReadonlyMap<string, SnapshotEntry<Row>>,
   rows: readonly Row[],
@@ -25,10 +33,10 @@ export function diffSnapshot<Row extends Json>(
     if (next.has(key)) throw new Error(`Duplicate Convex snapshot key: ${key}`);
     next.set(key, { key, value: row });
     const old = previous.get(key);
-    if (
-      old === undefined ||
-      JSON.stringify(old.value) !== JSON.stringify(row)
-    ) {
+    // Structural comparison, not JSON.stringify: serialising is sensitive to
+    // key order, so a row rebuilt by spread or with reordered fields would be
+    // reported as changed on every snapshot even when nothing moved.
+    if (old === undefined || !isDeepStrictEqual(old.value, row)) {
       updates.push([key, [row]]);
     }
   }
@@ -42,14 +50,15 @@ export function diffSnapshot<Row extends Json>(
 export class ConvexExternalService<Row extends Json>
   implements ExternalService
 {
-  private readonly client: ConvexClient;
+  private readonly client: ConvexSubscriber;
   private readonly subscriptions = new Map<string, () => void>();
 
   constructor(
-    convexUrl: string,
+    convex: string | ConvexSubscriber,
     private readonly resources: Record<string, ConvexReactiveResource<Row>>,
   ) {
-    this.client = new ConvexClient(convexUrl);
+    this.client =
+      typeof convex === "string" ? new ConvexClient(convex) : convex;
   }
 
   async subscribe(
