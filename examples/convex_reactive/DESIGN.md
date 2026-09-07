@@ -102,6 +102,72 @@ Other deliberate limitations:
   row would invent a second write authority. Mutations and optimistic source
   state belong on the Convex side.
 
+## The Skip control API is not a browser-facing surface
+
+Read this section before copying either example's `vite.config.ts`. It describes
+a deliberate development-only shortcut that becomes a real vulnerability if it is
+carried into a deployment unchanged.
+
+`runService` starts **two** HTTP listeners, and they are not equivalent:
+
+| Port | App | Routes |
+| --- | --- | --- |
+| 8080 | streaming | `GET /v1/streams/:uuid`, `GET /healthz` |
+| 8081 | control | `POST /v1/streams/:resource`, `DELETE /v1/streams/:uuid`, `POST /v1/snapshot/:resource`, `POST /v1/snapshot/:resource/lookup`, `PATCH /v1/inputs/:collection`, `GET /healthz` |
+
+The streaming port is a read-only fan-out of resource instances the control port
+already minted. The control port is the service's administrative surface. It has
+no authentication of its own -- Skip's REST layer does not attempt to model who
+is calling, because it is designed to sit behind something that does. In
+particular `PATCH /v1/inputs/:collection` **writes** into an input collection,
+and `POST /v1/snapshot/:resource` reads any resource whole, regardless of which
+resource a given browser is supposed to see.
+
+These examples need exactly two of those routes: `POST /v1/streams/:resource` to
+mint a stream, and `DELETE /v1/streams/:uuid` to release it on unmount. But the
+Vite dev proxy in both examples forwards the entire prefix:
+
+```ts
+"/skip-control": {
+  target: "http://localhost:8081",
+  rewrite: (path) => path.replace(/^\/skip-control/, ""),
+},
+```
+
+There is no path allowlist, so every control route -- including the write route
+-- is reachable from the page. On a localhost dev loop that is uninteresting:
+the listener is already bound to the developer's own machine, the proxy adds no
+reach that `curl` did not already have, and keeping the config to four lines
+keeps the example about the Convex-to-Skip boundary rather than about gateway
+configuration. **That is the whole justification, and it does not survive
+deployment.** Behind a public origin the same shape hands every visitor the
+ability to write into the service's input collections and to read any resource
+snapshot by name.
+
+We are not fixing this in the examples, because a correct fix is a gateway
+concern rather than an application concern, and inlining one here would teach the
+wrong lesson about where the boundary lives. Instead, what a real deployment owes
+you:
+
+1. **Never route the control port to a browser origin.** Terminate it inside your
+   own infrastructure. If a request from a browser can reach port 8081, the
+   design is already wrong, and no amount of CORS configuration repairs it --
+   CORS is a same-origin-policy relaxation enforced by the browser, so it
+   restricts cooperative pages and does nothing about a direct request.
+2. **Expose only the streaming port publicly**, and only the
+   `GET /v1/streams/:uuid` route on it. A stream UUID is an unguessable
+   capability, which is what makes this safe: the browser may read a stream it
+   was given, and cannot enumerate or mint others.
+3. **Mint and destroy streams server-side.** Your own authenticated endpoint
+   decides which resource and parameters a given user is entitled to, calls the
+   control port itself, and returns only the resulting UUID.
+
+This repository already contains a worked example of exactly that split:
+`examples/hackernews` puts haproxy in front of Skip exposing only `/streams/`,
+and its Python web service performs the control-port call on the user's behalf.
+Read `examples/hackernews/reverse_proxy/` and
+`examples/hackernews/web_service/` alongside this section.
+
 ## Production plan
 
 1. Extract the Convex adapter into a versioned package with typed resource
