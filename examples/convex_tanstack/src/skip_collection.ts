@@ -18,24 +18,35 @@ const config: CollectionConfig<ProjectSummary, string> = {
 
       const apply = (event: MessageEvent<string>, initial: boolean) => {
         const entries = JSON.parse(event.data) as SkipEntry[];
+        // Validate the whole batch before opening a transaction. A throw between
+        // begin() and commit() would strand the transaction in TanStack DB's
+        // pending queue -- it only retires committed ones -- and leave `current`
+        // describing rows the collection never received.
+        const staged = entries.map(([key, values]) => {
+          if (values.length > 1) {
+            throw new Error(`Expected one Skip value for ${key}`);
+          }
+          return { key, value: values[0] };
+        });
+
         begin();
         if (initial) {
           truncate();
           current.clear();
         }
-        for (const [key, values] of entries) {
-          if (values.length === 0) {
-            write({ type: "delete", key });
-            current.delete(key);
-          } else if (values.length === 1) {
-            const value = values[0]!;
-            write({ type: current.has(key) ? "update" : "insert", value });
-            current.set(key, value);
-          } else {
-            throw new Error(`Expected one Skip value for ${key}`);
-          }
+        for (const { key, value } of staged) {
+          if (value === undefined) write({ type: "delete", key });
+          else write({ type: current.has(key) ? "update" : "insert", value });
         }
-        void commit();
+        const applied = commit();
+        // Mirror the batch only once it is committed, so `current` never gets
+        // ahead of the collection. commit() applies synchronously and returns
+        // either `true` or a promise for downstream settling.
+        if (applied !== true) applied.catch(() => {});
+        for (const { key, value } of staged) {
+          if (value === undefined) current.delete(key);
+          else current.set(key, value);
+        }
         if (initial) {
           ready = true;
           markReady();
