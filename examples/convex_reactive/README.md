@@ -9,8 +9,8 @@ to the Skip SSE resource.
 
 ## Run it
 
-Requirements: Node.js 20 or newer and a Convex account (or a configured local
-Convex deployment).
+Requirements: Node.js 20.19+ or 22.12+ (the floor Vite 8 declares) and a Convex
+account (or a configured local Convex deployment).
 
 ```sh
 cd examples/convex_reactive
