@@ -23,9 +23,31 @@ export type ConvexReactiveResource<Row extends Json> = {
 export type ConvexSubscriber = Pick<ConvexClient, "onUpdate" | "close">;
 
 /** Where the adapter reports failures. Defaults to `console`. */
-export type ConvexAdapterLogger = { error: (message: string, error: unknown) => void };
+export type ConvexAdapterLogger = {
+  error: (message: string, error: unknown) => void;
+};
 
-export type ConvexExternalServiceOptions = { logger?: ConvexAdapterLogger };
+export type ConvexExternalServiceOptions = {
+  logger?: ConvexAdapterLogger;
+  /**
+   * Consecutive failed recoveries before a subscription stops retrying and
+   * goes inert. Convex redelivers a cached result as soon as a subscription is
+   * re-established, so an uncapped retry against a persistently failing Skip
+   * saturates the event loop. Defaults to 5.
+   */
+  maxResubscribeAttempts?: number;
+  /**
+   * Base delay in milliseconds between recovery attempts, doubled on each
+   * consecutive failure. Defaults to 100.
+   */
+  resubscribeBackoffMs?: number;
+  /**
+   * Whether `shutdown` closes the Convex client. Defaults to true when this
+   * service constructed the client from a URL, and false when a client was
+   * injected, since an injected client belongs to the caller and may be shared.
+   */
+  closeClient?: boolean;
+};
 
 /**
  * Convex's `Value` domain is wider than Skip's `Json`: `v.int64()` yields a
@@ -46,7 +68,9 @@ export function assertSkipJson(value: unknown, path = "row"): void {
     );
   }
   if (Array.isArray(value)) {
-    value.forEach((item, i) => { assertSkipJson(item, `${path}[${i}]`); });
+    value.forEach((item, i) => {
+      assertSkipJson(item, `${path}[${i}]`);
+    });
     return;
   }
   if (value !== null && typeof value === "object") {
@@ -95,18 +119,28 @@ export class ConvexExternalService<Row extends Json>
   private readonly client: ConvexSubscriber;
   private readonly logger: ConvexAdapterLogger;
   private readonly subscriptions = new Map<string, Subscription>();
+  private readonly maxResubscribeAttempts: number;
+  private readonly resubscribeBackoffMs: number;
+  private readonly closeClient: boolean;
 
   constructor(
     convex: string | ConvexSubscriber,
     private readonly resources: Record<string, ConvexReactiveResource<Row>>,
     options: ConvexExternalServiceOptions = {},
   ) {
-    this.client =
-      typeof convex === "string" ? new ConvexClient(convex) : convex;
+    const ownsClient = typeof convex === "string";
+    this.client = ownsClient ? new ConvexClient(convex) : convex;
     // A library should not own a logging policy; console is only the default.
     this.logger = options.logger ?? {
-      error: (message, error) => { console.error(message, error); },
+      error: (message, error) => {
+        console.error(message, error);
+      },
     };
+    this.maxResubscribeAttempts = options.maxResubscribeAttempts ?? 5;
+    this.resubscribeBackoffMs = options.resubscribeBackoffMs ?? 100;
+    // An injected client belongs to the caller and may be shared, so only
+    // close what this service itself opened unless the caller overrides it.
+    this.closeClient = options.closeClient ?? ownsClient;
   }
 
   async subscribe(
@@ -136,6 +170,9 @@ export class ConvexExternalService<Row extends Json>
     let initialSettled = false;
     let released = false;
     let reconnecting = false;
+    let generation = 0;
+    let resubscribeAttempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let delivery = Promise.resolve();
     let detach: (() => void) | undefined;
     let resolveInitial: () => void;
@@ -145,12 +182,21 @@ export class ConvexExternalService<Row extends Json>
       rejectInitial = reject;
     });
 
-    const reportError = (error: unknown) => {
+    const reportError = (
+      error: unknown,
+      sourceGeneration?: number,
+      shouldRejectInitial = true,
+    ) => {
+      // A generation-tagged error from a subscription this instance already
+      // replaced is stale, not new information.
+      if (sourceGeneration !== undefined && sourceGeneration !== generation) {
+        return;
+      }
       // Skip binds an external service's error channel to a no-op, so log here
       // or the failure leaves no trace at all.
       this.logger.error("Convex external service error", error);
       callbacks.error(error);
-      if (!initialSettled) rejectInitial(error);
+      if (!initialSettled && shouldRejectInitial) rejectInitial(error);
     };
 
     // Convex re-delivers a query result only when its read set changes, so a
@@ -158,48 +204,87 @@ export class ConvexExternalService<Row extends Json>
     // quiet the projection would stay stale forever. Tear the subscription down
     // and re-establish it, resetting the mirror so the next delivery is a full
     // initial batch Skip can accept from scratch.
+    //
+    // ConvexClient.onUpdate re-runs its callback almost immediately when a
+    // result is already cached, so retrying without a cap or backoff against a
+    // persistently failing consumer turns "recovery" into a hot loop that
+    // starves the event loop.
     const resubscribe = () => {
       if (released || reconnecting) return;
+      if (resubscribeAttempts >= this.maxResubscribeAttempts) {
+        released = true;
+        detach?.();
+        reportError(
+          new Error(
+            `Convex resource instance '${instance}' stopped after ${this.maxResubscribeAttempts.toString()} failed recoveries and is now inert. Unsubscribe and subscribe again to retry.`,
+          ),
+        );
+        return;
+      }
+      const delay = this.resubscribeBackoffMs * 2 ** resubscribeAttempts;
+      resubscribeAttempts += 1;
       reconnecting = true;
       detach?.();
-      current = new Map();
-      initialQueued = false;
-      attach();
-      reconnecting = false;
+      // Discard anything still queued from the subscription being replaced.
+      generation += 1;
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        if (released) return;
+        current = new Map();
+        initialQueued = false;
+        attach();
+        reconnecting = false;
+      }, delay);
+      // Never hold the process open for a recovery that nothing is awaiting.
+      retryTimer.unref();
     };
 
-    const onRows = (rows: Row[]) => {
+    const onRows = (rows: Row[], sourceGeneration: number) => {
+      if (sourceGeneration !== generation) return;
       const isInitial = !initialQueued;
       initialQueued = true;
       // Diff and advance `current` inside the delivery chain: the mirror must
       // only move to a snapshot Skip actually accepted.
       delivery = delivery
         .then(async () => {
-          // Skip tore this instance down while the batch was queued behind an
-          // in-flight delivery. Dropping it is correct; reporting it as an
-          // error would fire on every clean teardown under load.
-          if (released) return;
+          // Skip tore this instance down, or a recovery replaced this
+          // subscription, while the batch was queued behind an in-flight
+          // delivery. Dropping it is correct; reporting it as an error would
+          // fire on every clean teardown under load.
+          if (released || sourceGeneration !== generation) return;
           const result = diffSnapshot(current, rows, resource.getKey);
           await callbacks.update(result.updates, isInitial);
           current = result.next;
+          // A delivery Skip accepted means the consumer is healthy again, so
+          // the next failure starts a fresh backoff rather than inheriting one.
+          resubscribeAttempts = 0;
           if (isInitial) {
             initialSettled = true;
             resolveInitial();
           }
         })
         .catch((error: unknown) => {
-          if (released) return;
-          reportError(error);
-          if (initialSettled) resubscribe();
+          if (released || sourceGeneration !== generation) return;
+          // A rejected initial batch is recoverable just like a later one:
+          // retain the pending subscribe call and replace the Convex
+          // subscription so a quiet query result is delivered again.
+          reportError(error, sourceGeneration, false);
+          resubscribe();
         });
     };
 
     const attach = () => {
+      const sourceGeneration = generation + 1;
+      generation = sourceGeneration;
       detach = this.client.onUpdate(
         resource.query,
         resource.args,
-        onRows,
-        reportError,
+        (rows) => {
+          onRows(rows, sourceGeneration);
+        },
+        (error) => {
+          reportError(error, sourceGeneration);
+        },
       );
     };
 
@@ -207,6 +292,10 @@ export class ConvexExternalService<Row extends Json>
     this.subscriptions.set(instance, {
       release: () => {
         released = true;
+        if (retryTimer !== undefined) {
+          clearTimeout(retryTimer);
+          retryTimer = undefined;
+        }
         detach?.();
       },
       drain: () => delivery,
@@ -236,6 +325,6 @@ export class ConvexExternalService<Row extends Json>
     });
     this.subscriptions.clear();
     await Promise.allSettled(draining);
-    await this.client.close();
+    if (this.closeClient) await this.client.close();
   }
 }
