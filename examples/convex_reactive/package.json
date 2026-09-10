@@ -13,6 +13,7 @@
     "web:dev": "vite",
     "build": "npm run typecheck && vite build",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm run build --workspace=@skip-adapter/convex",
     "test": "tsx --test skip/service.test.ts"
   },
   "dependencies": {
