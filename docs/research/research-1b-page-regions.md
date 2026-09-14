@@ -10,7 +10,9 @@ date: 2026-09-13
 
 Skip-side shape for plan `2026-09-10-1843` (index-ordered Convex reactive
 pages as separate Skip input regions, no backend changes, no raw
-`/api/sync`). Pairs with convex-backend `research-1b-page-topology.md`.
+`/api/sync`). Pairs with convex-backend `research-1b-page-topology.md`
+and `research-1b-pagination-boundary.md` (three layers: fixed take-50
+product / native oracle / paginated acquisition).
 
 ## Rule: preserve page identity; republish only changed pages
 
@@ -30,7 +32,9 @@ pages as separate Skip input regions, no backend changes, no raw
   inverse `remove` per `paginated-reactive-source-loaded-window-reducer`
   (precedent `AddTaskTotals:80-86` in
   `examples/convex_reactive/skip/service.ts`) so page moves are
-  add+remove, not rescan.
+  add+remove, not rescan. The maintained aggregate is the contract's
+  per-message `likeCount`; merged output uses the contract's canonical
+  ordering and projection (`paginated-reactive-source-disjoint-page-merge`).
 - Disjointness + ordering: assert disjoint IDs across pages; tie-break
   `[_id]` (or `[_creationTime,_id]` per the shared envelope) for
   deterministic order. Page splits (1→2) need
@@ -41,6 +45,16 @@ pages as separate Skip input regions, no backend changes, no raw
   `paginated-reactive-source-incomplete-split-result` and is never
   published. Without atomic swap a moving row briefly appears twice or
   not at all.
+- Boundary layers per `research-1b-pagination-boundary.md`: "take exactly
+  50, do not paginate" is a product-query rule satisfied at the
+  merge/order point, not a transport ban — 1b paginates acquisition
+  internally (`messages.by_room` cursor-bounded pages), merges with the
+  disjoint-ID assertion, produces canonical ordering/projection, and
+  applies `take(50)` in Skip `instantiate` only, never source-side
+  (source-side take reads as mass deletion). Skip `slice`/`take` follow
+  key order, so a composite `[creationTime,_id]` key or re-keying mapper
+  is required. Open: prefix shorter than 50 compares prefix-scoped on
+  both sides; `_id` vs composite key schema for `take(50)`.
 
 ## Metrics from Skip
 
@@ -72,6 +86,8 @@ correct; split a page and assert the atomic-swap invariant.
 
 ## Sources
 
+- `convex-backend/research/skip-convex-integration/research-1b-pagination-boundary.md`
+  (layers, `take(50)` placement, composite-key requirement)
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
   (`paginated-reactive-source-indexed-reactive-pagination`,
   `paginated-reactive-source-stable-page-snapshot-region`,

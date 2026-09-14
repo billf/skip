@@ -34,15 +34,15 @@ its stop conditions if P/Q are not stable at its verification gate.
 Direction 2 imports no TypeScript; it implements natively against
 `shared-prereqs-q-language-neutral-methodology-spec`.
 
-Terminology: "vehicle aggregate label" means the frozen PoC vehicle's
-two demo aggregates named in
-`convex-backend/research/skip-convex-integration/research-poc-vehicle-and-harness.md`:
-A1 is the per-user message-count reducer (carries the reducer add/remove
-bar), A2 is the joined latest-N feed (carries the join + ordering bar).
-They are names for demo outputs scoped to that vehicle — not
-cross-document requirement numbers, so they need no `IDENTIFIER-MAP.md`
-row. (Graph node ids above read `SP1A/SP1B/SP1C`, not `A1`, for exactly
-this reason.)
+Terminology: upstream commit `676813a47` retired the old A1/A2
+two-table aggregate labels as history. The binding vehicle is the shared
+five-table proof-vehicle contract (rooms/users/memberships/messages/
+likes; `memberships.by_room_user`, `messages.by_room`,
+`likes.by_message`; canonical latest-50 room feed with
+active-membership filter, nullable sender, per-message `likeCount`).
+Where this plan still says "A1/A2" it means that retired history, not a
+requirement number. (Graph node ids above read `SP1A/SP1B/SP1C` for
+exactly this reason.)
 
 ## P requirements
 
@@ -55,9 +55,8 @@ this reason.)
   `<comp>/<table>/<id>` with uniqueness checks, order-key helper.
   Generality: generic. Seam: `examples/convex_reactive/skip/service.ts:34-49`
   split, `:51-111` rejoin.
-  Accept: A1 per-user-count / A2 joined latest-N vehicle builds on
-  helpers, not hand-rolled keys (vehicle aggregate labels, not
-  requirement numbers).
+  Accept: five-table room-feed vehicle builds on helpers, not
+  hand-rolled keys.
 - `shared-prereqs-p-single-fork-per-atomic-unit` — one `writer.update`
   per atomic unit (Transition / revision group / page-group swap).
   Generality: generic. Seam: `core/src/index.ts:476-501` single-collection
@@ -73,10 +72,12 @@ this reason.)
   Generality: generic. Seam: `Runtime.sk:1038-1065`, `EagerDir.sk:1727`
   `native_eq` short-circuit.
   Accept: deletes propagate once, GC is bounded.
-- `shared-prereqs-p-poc-vehicle-demo` — helpers demoed on frozen A1/A2.
-  Generality: convex-only (tutorial vehicle).
-  Accept: A1 per-user-count reducer + A2 joined latest-N join run on the
-  library (vehicle aggregate labels, not requirement numbers).
+- `shared-prereqs-p-poc-vehicle-demo` — helpers demoed on the shared
+  five-table room feed: active-membership filtering, nullable-sender
+  parity, deterministic latest-50 ordering, per-message `likeCount`
+  add/remove correctness, through the envelope convention.
+  Generality: convex-only (proof-vehicle contract).
+  Accept: canonical feed + `likeCount` run on the library.
 - `shared-prereqs-p-standalone-test-suite` — split/merge/order/watermark/
   tombstone tests, no transport or Q dependency.
   Generality: generic. Accept: suite passes standalone.
@@ -107,14 +108,14 @@ this reason.)
 - `shared-prereqs-q-dual-reader-wiring` — Skip SSE vs independent native
   reader, loopback-only. Generality: generic. Accept: no shared code path.
 - `shared-prereqs-q-normalized-comparator` — canonical
-  `[_creationTime,_id]` sort, `Unknown`-fallback parity, structured
-  mismatches. Generality: generic comparator, convex-only parity rule.
-  Accept: mismatches locate keys, not bare boolean.
-- `shared-prereqs-q-poc-vehicle-driver` — A1 per-user count / A2
-  joined latest-N aggregates on frozen vehicle (A1/A2 are vehicle
-  aggregate labels from `research-poc-vehicle-and-harness.md`, not
-  requirement numbers).
-  Generality: convex-only. Accept: both aggregates compared.
+  `[_creationTime,_id]` ordering, nullable-sender and exact-`likeCount`
+  parity, structured mismatches. Generality: generic comparator,
+  convex-only parity rules. Accept: mismatches locate keys, not bare
+  boolean.
+- `shared-prereqs-q-poc-vehicle-driver` — five tables, required
+  application indexes, fixed 50-message room feed, exact output
+  projection, independent native reader.
+  Generality: convex-only. Accept: canonical feed compared.
 - `shared-prereqs-q-counter-timer-catalog` — recorder implementing the
   shared catalog (1a populates only detector/dual-reader/comparator).
   Generality: generic.

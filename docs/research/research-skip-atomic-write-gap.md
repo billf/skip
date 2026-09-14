@@ -62,20 +62,40 @@ Probe: subscribe two resources, deliver query A then query B in separate
 ticks with a subscriber asserting cross-query invariant; observe the
 intermediate violation. Repeat through one merged domain; invariant holds.
 
+## Abstract batch contract (from `research-atomic-source-batch.md`)
+
+Transitions (1a), page-group swaps (1b), timestamp groups (1c), and
+committed transactions (Direction 2) share one contract: commit/`ts`
+ordering with per-document increasing `ts`; opaque monotonic version
+per direction recorded at every checkpoint; `_id`-only wire tombstones
+→ `[key,[]]` via retained value + watermark check, never resurrected;
+app-level per-key max-`ts` idempotence (`entry.ts > retained_ts`, Skip's
+SSE watermark is resume-only); one `writer.update` per unit with
+cursor/watermark persisted only after all group updates succeed. GC:
+retain per generation, discard on resnapshot/swap, sweep past horizon.
+Residual gaps P leaves open: FFI `updateMany`/fork-handle signature +
+concurrent-fork semantics, P9 scope (mandatory for 1b/1a or 1c-only),
+per-direction version/cursor types, sweep horizons, remove→null
+correctness per aggregate.
+
 ## What this adds vs convex-backend notes
 
-Convex-backend `research-skip-atomic-write.md` and the atomic-apply
+Convex-backend `research-skip-atomic-write.md`,
+`research-atomic-source-batch.md`, and the atomic-apply
 requirements already frame options (a)/(b)/(c) —
 `sync-protocol-client-atomic-transition-apply`,
 `data-sync-push-atomic-revision-group-apply`,
-`shared-prereqs-p-single-fork-per-atomic-unit` (plus 1b's page-group
-swap and Direction 2's backend-native equivalent, neither with a map
-row). This doc confirms from Skip-repo lines that
+`paginated-reactive-source-atomic-page-split`,
+`incremental-materialized-cache-transaction-atomic-visibility`,
+`shared-prereqs-p-single-fork-per-atomic-unit`. This doc confirms from
+Skip-repo lines that
 (a) does not exist, blesses (b) with the `workspace` precedent, and names
 the `chainInstanceOp`/delivery-chain pattern a new adapter must copy.
 
 ## Sources
 
+- `convex-backend/research/skip-convex-integration/research-atomic-source-batch.md`
+  (contract, per-direction mapping, residual gaps)
 - `skipruntime-ts/core/src/index.ts:469-533,768-807`
 - `skipruntime-ts/server/src/rest.ts:86-103`
 - `skipruntime-ts/helpers/src/rest.ts:186-206`

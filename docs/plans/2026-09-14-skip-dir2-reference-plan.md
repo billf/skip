@@ -23,15 +23,16 @@ graph TD
 ```
 
 Skip needs from the host: long-lived Mapper/Reducer graph with inverse
-`remove`, `LogReader`-tail grouping, version/health gate with measurable
-fallback (`incremental-materialized-cache-fallback-metrics`),
+`remove`, `LogReader`-tail grouping, causal-watermark version/health
+gate with measurable fallback
+(`incremental-materialized-cache-fallback-metrics`),
 logical-work counters
 (`incremental-materialized-cache-scaling-instrumentation`),
 correctness against an independent native result
 (`incremental-materialized-cache-independent-correctness-check`),
 scaling report
 (`incremental-materialized-cache-scaling-report`), `v.id` edges with
-`Unknown` parity
+`null`-sender parity
 (`incremental-materialized-cache-dangling-typed-reference`), handshake
 (`incremental-materialized-cache-accelerated-handshake`).
 `shared-prereqs-q-language-neutral-methodology-spec` is the only

@@ -11,9 +11,12 @@ date: 2026-09-13
 Skip-side view of plan `2026-09-11-1159` (prerequisite tier beneath
 1a/1b/1c/Dir2, not a spike): P = documented atomic multi-table write
 convention + small TS library; Q = correctness-comparator +
-fault-injection harness on frozen `convex-tutorial` vehicle. Pairs with
-convex-backend `research-skip-source-state.md`,
-`research-poc-vehicle-and-harness.md`, `research-spike-comparison.md`.
+fault-injection harness on the shared five-table proof-vehicle contract
+(rooms/users/memberships/messages/likes; upstream commit `676813a47`
+retired the two-table messages/users vehicle and its A1/A2 aggregate
+labels as history). Pairs with convex-backend
+`research-skip-source-state.md`, `research-poc-vehicle-and-harness.md`,
+`research-spike-comparison.md`.
 
 ## P: merged envelope convention (build-once)
 
@@ -43,14 +46,19 @@ convex-backend `research-skip-source-state.md`,
 
 ## Q: comparator + fault harness
 
-- Vehicle: frozen `convex-tutorial messages/users` + A1 per-user count /
-  A2 joined latest-N (`shared-prereqs-q-poc-vehicle-driver`; A1/A2 are
-  vehicle aggregate labels, not requirement numbers).
+- Vehicle: shared five-table proof-vehicle contract
+  (`shared-prereqs-q-poc-vehicle-driver`): rooms/users/memberships/
+  messages/likes fixture, `memberships.by_room_user` /
+  `messages.by_room` / `likes.by_message` indexes, canonical
+  latest-50 room feed with active-membership filter, nullable sender
+  (`null`, not `"Unknown"`), and per-message `likeCount`. The old A1
+  per-user count / A2 joined latest-N labels are retired history.
 - `shared-prereqs-q-settled-checkpoint-detector` on
   `Transition.end_version` / DataSync `UpToDate(ts)`;
   `shared-prereqs-q-dual-reader-wiring` (`ConvexClient`/`convex-test` vs
-  SSE); `shared-prereqs-q-normalized-comparator` deep-equal + `Unknown`
-  parity; `shared-prereqs-q-counter-timer-catalog` recorder (superset of
+  SSE); `shared-prereqs-q-normalized-comparator` deep-equal +
+  nullable-sender and exact-`likeCount` parity;
+  `shared-prereqs-q-counter-timer-catalog` recorder (superset of
   the spike-comparison catalog; 1a populates only detector/dual-reader/
   comparator above);
   `shared-prereqs-q-fault-injection-fixture` eight common faults
