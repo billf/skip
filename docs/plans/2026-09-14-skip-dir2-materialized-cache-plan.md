@@ -21,48 +21,53 @@ graph TD
     GRAPH --> VIEW[Pre-registered room feed]
     VIEW --> GATE[Version-gated reads]
     GATE --> NAT[Native fallback measurable]
-    Q12[Q12 spec] -. defines correctness/metrics .-> GATE
+    SPEC[shared-prereqs-q-language-neutral-methodology-spec] -. defines correctness/metrics .-> GATE
 ```
 
 ## Requirements
 
-- Long-lived incremental graph (maps to
-  `sync-protocol-client-atomic-transition-apply` shape, backend-native).
+- Long-lived incremental graph, backend-native implementation of the
+  `shared-prereqs-p-single-fork-per-atomic-unit` shape.
   Generality: generic. Seam: Mapper/Reducer with inverse `remove`
   (precedent `examples/convex_reactive/skip/service.ts:68-87`).
   Accept: one transaction's changes visible atomically at one commit
   version; no per-query torn reads.
-- `sync-protocol-client-cross-query-reducer` shape — derived value spans
-  tables via reducer, not relay.
+- Derived values span tables via reducer, not relay (same shape as
+  `sync-protocol-client-cross-query-reducer`, backend-native).
   Generality: generic. Accept: join/filter/order/reduce maintained
   incrementally across commits.
 - Pre-registered room feed only (membership filter, like reduction,
   `(_creationTime,_id)` order, bounded top-N).
   Generality: convex-only vehicle. Accept: membership/ordering/limit
   match the native oracle definition.
+- `incremental-materialized-cache-accelerated-handshake` — ordinary
+  handshake carries experimental acceleration option; app args/values
+  stay ordinary Convex values.
+  Generality: convex-only. Accept: app surface unchanged.
 - Version-gated freshness + rebuildable cache (Convex stays source of
   truth; bootstrap/recovery rebuild from consistent state, never publish
-  partial).
+  partial) with `incremental-materialized-cache-fallback-metrics`
+  (accelerated/fallback counts, rate/reason, progress vs required
+  version, rebuild state, mismatches).
   Generality: generic pattern, convex-only commit versions.
   Accept: stale reads are checkable against commit order; fallback stays
   measurable (counts, not silence).
-- Logical-work instrumentation at each stage (changed-neighborhood
-  attribution, asymptotic judgment over absolute thresholds).
+- `incremental-materialized-cache-scaling-instrumentation` at each stage
+  plus `incremental-materialized-cache-scaling-report` (vary total size
+  and affected fan-out; work/state follow complexity terms).
   Generality: generic. Accept: scaling report vs strongest native
   baseline (indexes/counters/denormalization).
-- `shared-prereqs-q-language-neutral-methodology-spec` reuse —
-  settled definition, normalization, counter names implemented natively
-  in Rust against Q12, not the TS harness.
-  Generality: generic. Accept: same definitions as 1a/1b claims.
-- `v.id` join hints with dangling-reference parity (`Unknown`, never
-  integrity guarantee; reverse joins need enabled app index).
+- `incremental-materialized-cache-independent-correctness-check` via
+  `shared-prereqs-q-language-neutral-methodology-spec` reuse — settled
+  definition, normalization, counter names implemented natively in Rust,
+  not the TS harness.
+  Generality: generic. Accept: same definitions as 1a/1b claims across
+  bootstrap/inserts/updates/deletes/multi-table/restart/lag/recovery.
+- `incremental-materialized-cache-dangling-typed-reference` — `v.id`
+  join hints with dangling-reference parity (`Unknown`, never integrity
+  guarantee; reverse joins need enabled app index).
   Generality: convex-only. Accept: missing targets preserve native
   behavior.
-
-Upstream TODO (blocked): `IDENTIFIER-MAP.md:145-155` notes
-`shared-prereqs` cites Direction 2 `R12/R13/R15` + `R13/AE7`, but the
-Direction 2 plan defines only R1-R11. This plan cites only resolved
-anchors above until upstream corrects either side.
 
 ## Non-goals
 

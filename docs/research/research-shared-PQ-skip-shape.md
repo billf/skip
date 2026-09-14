@@ -19,15 +19,19 @@ convex-backend `research-skip-source-state.md`,
 
 - Envelope per row: `{ts,deleted,component,table,_id,_creationTime,doc}`,
   Skip key `<comp>/<table>/<id>`, order `[_creationTime,_id]`.
-  Tombstones are `[key,[]]` with `isInit:false`; in-value `ts` watermark
+   Tombstones are `[key,[]]` with `isInit:false`; in-value `ts` watermark
   (not session tick); tombstone GC + generation-fencing/pending-ledger
-  per 1c KTD7-KTD9 bar (P9).
+  per `data-sync-push-ktd-generation-fenced-ingestion` /
+  `data-sync-push-ktd-scoped-replay-watermarks`
+  (`shared-prereqs-p-generation-fencing-extension`).
 - Library: envelope type, split-mapper (cf.
   `ProjectsOnly`/`TasksOnly` in
   `examples/convex_reactive/skip/service.ts:34-49` plus
   `TasksByProject/AddTaskTotals/AttachTotals` rejoin at `:51-111`),
-  key/order helpers, watermark/tombstone helpers, P7 synthetic tests, P8
-  no-FFI statement; upstream-contribution candidate.
+  key/order helpers, watermark/tombstone helpers,
+  `shared-prereqs-p-standalone-test-suite` synthetics,
+  `shared-prereqs-p-no-runtime-change-required` statement;
+  upstream-contribution candidate.
 - Precedent to extract: `examples/convex_reactive/{skip/service.ts:34-89,
   160-161, shared/model.ts:16-18, DESIGN.md:114-118,314-315}`.
   Verified single-collection ceiling: `CollectionWriter.update:476-501` +
@@ -40,16 +44,21 @@ convex-backend `research-skip-source-state.md`,
 ## Q: comparator + fault harness
 
 - Vehicle: frozen `convex-tutorial messages/users` + A1 per-user count /
-  A2 joined latest-N.
-- Q1 settled predicate on `Transition.end_version` / DataSync
-  `UpToDate(ts)`; Q2 dual-reader (`ConvexClient`/`convex-test` vs SSE);
-  Q3 normalized deep-equal + `Unknown` parity; Q5 recorder (superset of
-  the spike-comparison catalog; 1a exempt); Q6 eight common faults
+  A2 joined latest-N (`shared-prereqs-q-poc-vehicle-driver`).
+- `shared-prereqs-q-settled-checkpoint-detector` on
+  `Transition.end_version` / DataSync `UpToDate(ts)`;
+  `shared-prereqs-q-dual-reader-wiring` (`ConvexClient`/`convex-test` vs
+  SSE); `shared-prereqs-q-normalized-comparator` deep-equal + `Unknown`
+  parity; `shared-prereqs-q-counter-timer-catalog` recorder (superset of
+  the spike-comparison catalog; 1a populates Q1-Q3 only);
+  `shared-prereqs-q-fault-injection-fixture` eight common faults
   (disconnect-before-checkpoint, cursor expiry/invalid/ahead, table
   replacement, oversized transactions, `QueryFailed` vs `QueryRemoved`,
   slow-consumer/backlog exhaustion, mid-CDC restart, page-split +
-  invalid-cursor reset) + Q7 assertions; Q8 seeded-mismatch proof; Q11
-  1c-JSONL-compatible schema.
+  invalid-cursor reset) +
+  `shared-prereqs-q-fault-assertion-helper`;
+  `shared-prereqs-q-self-test-seeded-mismatches` proof;
+  `shared-prereqs-q-schema-matches-1c-jsonl` schema.
 - No comparator exists in Skip today (`crates/common/src/comparators/`
   cited in `1159` as negative proof); reference readers are
   `convex-tutorial convex/{schema.ts:6-12,chat.ts,chat.test.ts}` and the
@@ -59,12 +68,14 @@ convex-backend `research-skip-source-state.md`,
   `commit(ack)→readable→delivered→applied→published`; counts plus full
   chain reported alongside O(K) vs O(N) curves.
 
-Probe: P7 synthetics (envelope round-trip, tombstone GC, fencing) plus a
-Q8 seeded mismatch proving the comparator fails loudly on deliberately
-diverged state.
+Probe: `shared-prereqs-p-standalone-test-suite` synthetics
+(envelope round-trip, tombstone GC, fencing) plus a
+`shared-prereqs-q-self-test-seeded-mismatches` proof that the comparator
+fails loudly on deliberately diverged state.
 
 ## Sources
 
+- `convex-backend/docs/plans/IDENTIFIER-MAP.md` (all P/Q anchors above)
 - Plan `2026-09-11-1159-feat-skip-shared-prerequisites-plan.md`
 - `skipruntime-ts/core/src/index.ts:476-501,768-782`
 - `skipruntime-ts/skiplang/core/src/Runtime.sk:1038-1065`

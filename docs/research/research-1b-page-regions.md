@@ -15,7 +15,8 @@ pages as separate Skip input regions, no backend changes, no raw
 ## Rule: preserve page identity; republish only changed pages
 
 - Concatenating pages into one result (the `use_paginated_query`
-  keep-old-until-replacements-load pattern) is invalid for R3: any page
+  keep-old-until-replacements-load pattern) is invalid for the page-region
+  requirement (1b R3, local-only): any page
   change republishes the whole concatenation through reconciliation.
   Instead each page keeps its own input region (own collection or key
   prefix); when a page changes, only that page republishes; unchanged
@@ -50,6 +51,10 @@ correct; split a page and assert the atomic-swap invariant.
 
 ## Sources
 
+- `convex-backend/docs/plans/IDENTIFIER-MAP.md`
+  (`paginated-reactive-source-bounded-prefix-load`,
+  `paginated-reactive-source-disjoint-page-merge`,
+  `shared-prereqs-p-single-fork-per-atomic-unit`)
 - Plan `2026-09-10-1843-feat-skip-paginated-reactive-source-spike-plan.md`
 - `examples/convex_reactive/skip/service.ts:51-87` (mapper+reducer shape)
 - `skiplang/prelude/src/skstore/EagerDir.sk:1717-1729`
