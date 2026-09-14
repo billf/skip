@@ -261,43 +261,34 @@ both the identity and that the requested project belongs to the configured
 tenant. End-user token propagation and shared multi-tenant adapter instances are
 not part of this v1 shape.
 
-1. Extract the Convex adapter into a versioned package. Land as
-   `@skip-adapter/convex` at `skipruntime-ts/adapters/convex`, versioned in
-   lockstep with `@skipruntime/core` and pinning it exactly, and register it in
-   the root `package.json` workspaces, `skipruntime-ts/metapackage`
-   `optionalDependencies`, a `publish-convex-adapter` Makefile target inside
-   `publish-all`, `skipruntime-ts/tests`, and the typedoc entries in
-   `www/docusaurus.config.ts` and `www/sidebars.ts` -- the same set
-   `@skip-adapter/postgres` occupies. Omitting the Makefile target ships a
-   release without the adapter and nothing fails loudly.
+1. The Convex adapter is now a versioned package: `@skip-adapter/convex` lives
+   at `skipruntime-ts/adapters/convex`, is versioned in lockstep with
+   `@skipruntime/core`, and is registered in the root workspaces, metapackage,
+   release target, tests, and Typedoc configuration alongside
+   `@skip-adapter/postgres`.
 
    **Parameterisation is part of the initial API.** `subscribe` continues to
    receive `Json`, as required by `ExternalService`; each resource supplies a
    named `argsFromParams` parser returning the generated
-   `FunctionArgs<Query>`. It validates every field, rejects tenant overrides,
-   and constructs the complete Convex argument object from the immutable scope
-   and allowed subscription parameters. Do not use a generic
-   `Record<string, Value>` argument bag or default-argument merging.
+   `FunctionArgs<Query>`. That parser validates every caller-supplied field,
+   rejects tenant overrides, and constructs the complete Convex argument object
+   from the immutable scope and allowed subscription parameters. Do not use a
+   generic `Record<string, Value>` argument bag or default-argument merging.
 
-   Still genuinely new work in this step: typed resource factories, schema
-   validation, structured logging, and delivery latency metrics. Two items
-   originally listed here are done -- row comparison is structural rather than
-   `JSON.stringify`, and reconnect, callback-failure, unsubscribe and shutdown
-   coverage lives with the adapter package.
+   The package includes typed resource factories, runtime scope and value-domain
+   validation, structural row comparison, and coverage for reconnect,
+   callback-failure, unsubscribe, and shutdown. The remaining follow-up work
+   here is structured logging and delivery-latency metrics.
 
-   Two contracts the extraction must state that the example never had to:
+   Two package contracts the example did not need to state are now enforced:
    - **Value domain.** Convex `Value` includes `bigint` (`v.int64`) and
-     `ArrayBuffer` (`v.bytes`), neither of which is Skip `Json`. `exportJSON`
-     throws an opaque wasm error on the former and silently exports the latter as
-     `{}`. Reject both at the boundary with a named error, and require callers
-     wanting them to supply a row encoder.
-   - **Teardown ordering.** `unsubscribe` and `shutdown` drop the instance
-     synchronously without draining the in-flight `delivery` chain, so a queued
-     `callbacks.update` can run after Skip tore the collection down and throw
-     back into the error path on every clean teardown under load. Serialize
-     per-instance setup and teardown against the delivery chain, as
-     `@skip-adapter/postgres` does with `chainInstanceOp`, and drop late
-     deliveries for a released instance rather than reporting them as errors.
+     `ArrayBuffer` (`v.bytes`), neither of which is Skip `Json`. The adapter
+     rejects both at the boundary with a named error; callers that need them
+     must supply a row encoder.
+   - **Teardown ordering.** `unsubscribe` and `shutdown` release the instance
+     before waiting for the in-flight `delivery` chain, so late deliveries are
+     dropped rather than reported as errors after Skip has torn the collection
+     down.
 2. Add the authenticated tenant-scoped query and gateway before exposing bounded
    partitions. Replace the whole-workspace query with bounded partitions (for
    example one project per resource instance within the adapter's fixed tenant),
