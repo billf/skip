@@ -1,4 +1,4 @@
-FROM python:3.10.16-bookworm
+FROM python:3.10.19-bookworm@sha256:44325b079a3c59b1dd0704471fc9ffccd98f13789f00f30bdbdaa99dce03bcc7
 WORKDIR /app
 COPY requirements.txt requirements.txt
 RUN pip install -r requirements.txt
