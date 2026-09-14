@@ -20,28 +20,43 @@ recommending `LogReader` tail with ts-grouped atomic apply).
 
 ## Skip needs from the host
 
-- Long-lived `Mapper`/`Reducer` graph with inverse `remove` (precedent
+- Input per `incremental-materialized-cache-committed-row-change-input`
+  (ordered post-commit rows only; no polling/rerun/diff); visibility per
+  `incremental-materialized-cache-transaction-atomic-visibility`;
+  maintenance per
+  `incremental-materialized-cache-incremental-maintained-operators`
+  (long-lived `Mapper`/`Reducer` graph with inverse `remove`, precedent
   `AddTaskTotals.add/remove` in
   `examples/convex_reactive/skip/service.ts:68-87`); one combined input
   domain or scoped atomic update per
   `shared-prereqs-p-single-fork-per-atomic-unit`, backend-native
   reimplementation (same TS gap as Dir1 — see atomic-write gap doc).
 - Committed-change feed grouped by transaction with seed/rebuild paths
-  and a retention budget; version/health gate on reads with fallback to
-  native execution that stays measurable
+  per `incremental-materialized-cache-consistent-bootstrap-recovery`
+  (never publish partial/torn) and a retention budget; version/health
+  gate per `incremental-materialized-cache-required-version-consistency`
+  with fallback per `incremental-materialized-cache-native-fallback`
+  that stays measurable
   (`incremental-materialized-cache-fallback-metrics`).
 - Logical-work counters (not wall-clock):
   `incremental-materialized-cache-scaling-instrumentation` plus
   `incremental-materialized-cache-scaling-report` — unrelated-data size
-  vs affected-fan-out axes, evaluated asymptotically against the
-  strongest native baseline (indexes, counters, denormalization), not
-  microsecond comparison; correctness per
-  `incremental-materialized-cache-independent-correctness-check` via
-  `shared-prereqs-q-language-neutral-methodology-spec`.
-- Schema: stable-vs-internal index metadata split with lifecycle
-  validation; `v.id` join edges with dangling-reference semantics
+  vs affected-fan-out axes, evaluated asymptotically against
+  `incremental-materialized-cache-idiomatic-convex-baseline` (indexes,
+  counters, denormalization), not microsecond comparison; correctness
+  per `incremental-materialized-cache-independent-correctness-check` via
+  `shared-prereqs-q-language-neutral-methodology-spec`; surface
+  unchanged per `incremental-materialized-cache-native-surface-unchanged`.
+- Schema: `incremental-materialized-cache-implicit-base-index-views`
+  plus `incremental-materialized-cache-indexed-maintained-lookups` with
+  `incremental-materialized-cache-index-eligibility-validation`;
+  `incremental-materialized-cache-validated-id-join-edges` and
+  `incremental-materialized-cache-reverse-join-index` with
+  `incremental-materialized-cache-missing-target-join-semantics`
   (`incremental-materialized-cache-dangling-typed-reference`, `Unknown`
-  fallback, cf. 1c vehicle `convex/chat.ts`); handshake per
+  fallback, cf. 1c vehicle `convex/chat.ts`); view scoped per
+  `incremental-materialized-cache-preregistered-room-message-feed`;
+  handshake per
   `incremental-materialized-cache-accelerated-handshake`.
 
 ## Explicit non-goals from the Skip side

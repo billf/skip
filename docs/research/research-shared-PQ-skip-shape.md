@@ -44,13 +44,15 @@ convex-backend `research-skip-source-state.md`,
 ## Q: comparator + fault harness
 
 - Vehicle: frozen `convex-tutorial messages/users` + A1 per-user count /
-  A2 joined latest-N (`shared-prereqs-q-poc-vehicle-driver`).
+  A2 joined latest-N (`shared-prereqs-q-poc-vehicle-driver`; A1/A2 are
+  vehicle aggregate labels, not requirement numbers).
 - `shared-prereqs-q-settled-checkpoint-detector` on
   `Transition.end_version` / DataSync `UpToDate(ts)`;
   `shared-prereqs-q-dual-reader-wiring` (`ConvexClient`/`convex-test` vs
   SSE); `shared-prereqs-q-normalized-comparator` deep-equal + `Unknown`
   parity; `shared-prereqs-q-counter-timer-catalog` recorder (superset of
-  the spike-comparison catalog; 1a populates Q1-Q3 only);
+  the spike-comparison catalog; 1a populates only detector/dual-reader/
+  comparator above);
   `shared-prereqs-q-fault-injection-fixture` eight common faults
   (disconnect-before-checkpoint, cursor expiry/invalid/ahead, table
   replacement, oversized transactions, `QueryFailed` vs `QueryRemoved`,

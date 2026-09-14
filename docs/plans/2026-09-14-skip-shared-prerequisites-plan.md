@@ -18,13 +18,13 @@ numbers. Skip-local additions use `skip-{concept}` slugs defined here.
 
 ```mermaid
 graph TD
-    P[Skip P envelope library] --> A1[1a sync-protocol client<br/>hard prerequisite]
-    P --> B1[1b paginated source<br/>hard prerequisite]
-    P -. conditional, fallback to hand-build .-> C1[1c push source U4]
-    Q[Skip Q comparator harness] --> A1
-    Q --> B1
-    Q -. conditional, fallback to bespoke .-> C1
-    SPEC[shared-prereqs-q-language-neutral-methodology-spec] -. spec only .-> D2[Direction 2 cache]
+    P[Skip P envelope library] --> SP1A[1a sync-protocol client<br/>hard prerequisite]
+    P --> SP1B[1b paginated source<br/>hard prerequisite]
+    P -. conditional, fallback to hand-build .-> SP1C[1c push service]
+    Q[Skip Q comparator harness] --> SP1A
+    Q --> SP1B
+    Q -. conditional, fallback to bespoke .-> SP1C
+    SPEC[shared-prereqs-q-language-neutral-methodology-spec] -. spec only .-> DIR2[Direction 2 cache]
 ```
 
 1a/1b cannot start implementation until P/Q land. 1c consumes P in
@@ -33,6 +33,16 @@ graph TD
 its stop conditions if P/Q are not stable at its verification gate.
 Direction 2 imports no TypeScript; it implements natively against
 `shared-prereqs-q-language-neutral-methodology-spec`.
+
+Terminology: "vehicle aggregate label" means the frozen PoC vehicle's
+two demo aggregates named in
+`convex-backend/research/skip-convex-integration/research-poc-vehicle-and-harness.md`:
+A1 is the per-user message-count reducer (carries the reducer add/remove
+bar), A2 is the joined latest-N feed (carries the join + ordering bar).
+They are names for demo outputs scoped to that vehicle — not
+cross-document requirement numbers, so they need no `IDENTIFIER-MAP.md`
+row. (Graph node ids above read `SP1A/SP1B/SP1C`, not `A1`, for exactly
+this reason.)
 
 ## P requirements
 
@@ -45,7 +55,9 @@ Direction 2 imports no TypeScript; it implements natively against
   `<comp>/<table>/<id>` with uniqueness checks, order-key helper.
   Generality: generic. Seam: `examples/convex_reactive/skip/service.ts:34-49`
   split, `:51-111` rejoin.
-  Accept: A1/A2 vehicle builds on helpers, not hand-rolled keys.
+  Accept: A1 per-user-count / A2 joined latest-N vehicle builds on
+  helpers, not hand-rolled keys (vehicle aggregate labels, not
+  requirement numbers).
 - `shared-prereqs-p-single-fork-per-atomic-unit` — one `writer.update`
   per atomic unit (Transition / revision group / page-group swap).
   Generality: generic. Seam: `core/src/index.ts:476-501` single-collection
@@ -63,7 +75,8 @@ Direction 2 imports no TypeScript; it implements natively against
   Accept: deletes propagate once, GC is bounded.
 - `shared-prereqs-p-poc-vehicle-demo` — helpers demoed on frozen A1/A2.
   Generality: convex-only (tutorial vehicle).
-  Accept: A1 reducer + A2 join run on the library.
+  Accept: A1 per-user-count reducer + A2 joined latest-N join run on the
+  library (vehicle aggregate labels, not requirement numbers).
 - `shared-prereqs-p-standalone-test-suite` — split/merge/order/watermark/
   tombstone tests, no transport or Q dependency.
   Generality: generic. Accept: suite passes standalone.
@@ -75,7 +88,8 @@ Direction 2 imports no TypeScript; it implements natively against
   `data-sync-push-ktd-generation-fenced-ingestion` /
   `data-sync-push-ktd-scoped-replay-watermarks`.
   Generality: convex-only (DataSync generations).
-  Accept: 1c U4 imports or falls back; not required for 1a/1b.
+  Accept: `data-sync-push-u-implement-push-service` imports or falls
+  back; not required for 1a/1b.
 - `skip-teardown-serialization` (Skip-local) — serialize setup/teardown
   against the delivery chain; drop late deliveries, do not error.
   Generality: generic. Seam: `adapters/postgres/src/index.ts:45-59`
@@ -96,10 +110,14 @@ Direction 2 imports no TypeScript; it implements natively against
   `[_creationTime,_id]` sort, `Unknown`-fallback parity, structured
   mismatches. Generality: generic comparator, convex-only parity rule.
   Accept: mismatches locate keys, not bare boolean.
-- `shared-prereqs-q-poc-vehicle-driver` — A1/A2 on frozen vehicle.
+- `shared-prereqs-q-poc-vehicle-driver` — A1 per-user count / A2
+  joined latest-N aggregates on frozen vehicle (A1/A2 are vehicle
+  aggregate labels from `research-poc-vehicle-and-harness.md`, not
+  requirement numbers).
   Generality: convex-only. Accept: both aggregates compared.
 - `shared-prereqs-q-counter-timer-catalog` — recorder implementing the
-  shared catalog (1a populates Q1-Q3 only). Generality: generic.
+  shared catalog (1a populates only detector/dual-reader/comparator).
+  Generality: generic.
   Accept: same names/units across spikes.
 - `shared-prereqs-q-fault-injection-fixture` — common faults
   (disconnect, cursor expiry, table replacement, oversized txn, etc).
