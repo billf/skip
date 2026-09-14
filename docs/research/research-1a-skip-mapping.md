@@ -24,8 +24,9 @@ one atomic Skip write with no bridge diffing. Pairs with convex-backend
   via `native_eq` — no dirty marking, no reducer work for them.
 - One `context.update()` per call = one reactive tick and one subscriber
   notification set. Two queries = two ticks; subscribers observe the
-  intermediate (see `research-skip-atomic-write-gap.md`). The plan's R2
-  choice is therefore: single merged input domain (loses per-query init
+   intermediate (see `research-skip-atomic-write-gap.md`). The
+  `sync-protocol-client-atomic-transition-apply` choice is therefore:
+  single merged input domain (loses per-query init
   granularity, keeps atomicity) vs scoped batch primitive (does not
   exist) vs per-query ticks + downstream merge (eventual consistency).
 - Failure handling: freeze vs `QueryRemoved`-clear per the mapping doc;
@@ -59,6 +60,10 @@ merged into one domain.
 
 ## Sources
 
+- `convex-backend/docs/plans/IDENTIFIER-MAP.md`
+  (`sync-protocol-client-atomic-transition-apply`,
+  `sync-protocol-client-cross-query-reducer`,
+  `sync-protocol-client-settled-checkpoint-comparator`)
 - Plan `2026-09-10-1509-feat-skip-sync-protocol-client-plan.md`
 - `skipruntime-ts/skiplang/core/src/Runtime.sk:1038-1065`
 - `skiplang/prelude/src/skstore/EagerDir.sk:1717-1729`

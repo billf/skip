@@ -20,7 +20,7 @@ graph TD
     PQ[Shared P/Q plan] --> S1[1a sync-protocol client]
     PQ --> S2[1b paginated source]
     PQ -. conditional .-> S3[1c push source]
-    D2[Direction 2 cache] -. independent, Q12 spec only .-> PQ
+    Q12[shared-prereqs-q-language-neutral-methodology-spec] -. spec only .-> D2[Direction 2 cache]
 ```
 
 ## 1a sync-protocol client
@@ -31,7 +31,8 @@ graph TD
   `sync-protocol-client-atomic-transition-apply`;
   `shared-prereqs-q-settled-checkpoint-detector`,
   `shared-prereqs-q-dual-reader-wiring`,
-  `shared-prereqs-q-normalized-comparator` for settled equality;
+  `shared-prereqs-q-normalized-comparator` for
+  `sync-protocol-client-settled-checkpoint-comparator`;
   `sync-protocol-client-cross-query-reducer` for the genuine-computation
   bar (`sync-protocol-client-first-attempt-failure` acceptance).
 - Seam: reassemble Transition/TransitionChunk, one `isInit:true` write,

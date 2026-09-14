@@ -19,19 +19,24 @@ no requirement text is duplicated here.
 graph TD
     BE[convex-backend commit path] --> SK[Skip graph native]
     SK --> VG[Version-gated reads + native fallback]
-    Q12[Q12 language-neutral spec] -. methodology .-> SK
+    SPEC[shared-prereqs-q-language-neutral-methodology-spec] -. methodology .-> SK
 ```
 
 Skip needs from the host: long-lived Mapper/Reducer graph with inverse
 `remove`, `LogReader`-tail grouping, version/health gate with measurable
-fallback, logical-work counters, `v.id` edges with `Unknown` parity.
-Q12 is the only adoptable shared artifact; P/Q TypeScript code is not
-imported.
-
-Blocked upstream: the `R12/R13/R15` citation trio flagged in
-`IDENTIFIER-MAP.md:145-155` does not resolve against Direction 2's
-R1-R11. Do not invent anchors; cite only resolved rows until upstream
-corrects either side.
+fallback (`incremental-materialized-cache-fallback-metrics`),
+logical-work counters
+(`incremental-materialized-cache-scaling-instrumentation`),
+correctness against an independent native result
+(`incremental-materialized-cache-independent-correctness-check`),
+scaling report
+(`incremental-materialized-cache-scaling-report`), `v.id` edges with
+`Unknown` parity
+(`incremental-materialized-cache-dangling-typed-reference`), handshake
+(`incremental-materialized-cache-accelerated-handshake`).
+`shared-prereqs-q-language-neutral-methodology-spec` is the only
+adoptable shared artifact; P/Q TypeScript code is not imported.
+Upstream `IDENTIFIER-MAP.md:152-169` confirms these rows resolve.
 
 ## Sources
 

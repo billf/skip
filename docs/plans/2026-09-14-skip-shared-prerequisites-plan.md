@@ -24,7 +24,7 @@ graph TD
     Q[Skip Q comparator harness] --> A1
     Q --> B1
     Q -. conditional, fallback to bespoke .-> C1
-    Q12[Q12 language-neutral spec] -. spec only .-> D2[Direction 2 cache]
+    SPEC[shared-prereqs-q-language-neutral-methodology-spec] -. spec only .-> D2[Direction 2 cache]
 ```
 
 1a/1b cannot start implementation until P/Q land. 1c consumes P in

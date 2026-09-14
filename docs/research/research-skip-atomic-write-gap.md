@@ -29,7 +29,7 @@ Skip-repo evidence and blesses the two viable options.
   internals are private; there is no public
   `updateMany([(dir,values,isInit)])` or exposed fork handle today.
 
-## Options for spikes (R2 in each plan)
+## Options for spikes (atomic-single-tick in each plan)
 
 (a) New runtime/FFI batch primitive — needs Skip-side design, out of
 spike scope. (b) Single merged external resource holding a tagged union
@@ -64,8 +64,13 @@ intermediate violation. Repeat through one merged domain; invariant holds.
 
 ## What this adds vs convex-backend notes
 
-Convex-backend `research-skip-atomic-write.md` and each plan's R2 already
-frame options (a)/(b)/(c). This doc confirms from Skip-repo lines that
+Convex-backend `research-skip-atomic-write.md` and the atomic-apply
+requirements already frame options (a)/(b)/(c) —
+`sync-protocol-client-atomic-transition-apply`,
+`data-sync-push-atomic-revision-group-apply`,
+`shared-prereqs-p-single-fork-per-atomic-unit` (plus 1b's page-group
+swap and Direction 2's backend-native equivalent, neither with a map
+row). This doc confirms from Skip-repo lines that
 (a) does not exist, blesses (b) with the `workspace` precedent, and names
 the `chainInstanceOp`/delivery-chain pattern a new adapter must copy.
 
