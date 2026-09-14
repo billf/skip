@@ -50,8 +50,11 @@ graph TD
   (accelerated/fallback counts, rate/reason, progress vs required
   version, rebuild state, mismatches).
   Generality: generic pattern, convex-only commit versions.
-  Accept: stale reads are checkable against commit order; fallback stays
-  measurable (counts, not silence).
+  Accept: required version is the connection's causal sync watermark
+  (max observed commit); a healthy behind-view waits only until
+  catch-up, read cancel/deadline, or unhealthiness, the latter two
+  falling back silently with reason recorded; recovery fence covers a
+  change before and a change after the snapshot cursor.
 - `incremental-materialized-cache-scaling-instrumentation` at each stage
   plus `incremental-materialized-cache-scaling-report` (vary total size
   and affected fan-out; work/state follow complexity terms).
@@ -64,7 +67,7 @@ graph TD
   Generality: generic. Accept: same definitions as 1a/1b claims across
   bootstrap/inserts/updates/deletes/multi-table/restart/lag/recovery.
 - `incremental-materialized-cache-dangling-typed-reference` — `v.id`
-  join hints with dangling-reference parity (`Unknown`, never integrity
+  join hints with dangling-reference parity (`null` sender, never integrity
   guarantee; reverse joins need enabled app index).
   Generality: convex-only. Accept: missing targets preserve native
   behavior.

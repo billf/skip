@@ -32,12 +32,15 @@ recommending `LogReader` tail with ts-grouped atomic apply).
   `shared-prereqs-p-single-fork-per-atomic-unit`, backend-native
   reimplementation (same TS gap as Dir1 — see atomic-write gap doc).
 - Committed-change feed grouped by transaction with seed/rebuild paths
-  per `incremental-materialized-cache-consistent-bootstrap-recovery`
-  (never publish partial/torn) and a retention budget; version/health
-  gate per `incremental-materialized-cache-required-version-consistency`
-  with fallback per `incremental-materialized-cache-native-fallback`
-  that stays measurable
-  (`incremental-materialized-cache-fallback-metrics`).
+  and a retention budget; version/health gate on reads with fallback to
+  native execution that stays measurable
+  (`incremental-materialized-cache-fallback-metrics`). Freshness per the
+  clarified contract: the required version is the connection's causal
+  sync watermark (max observed commit); a healthy behind-view waits only
+  until catch-up, read cancel/deadline, or unhealthiness — the latter two
+  fall back silently with reason recorded. Recovery fence: one change
+  before the consistent-snapshot cursor plus one after, both covered
+  before acceleration is eligible.
 - Logical-work counters (not wall-clock):
   `incremental-materialized-cache-scaling-instrumentation` plus
   `incremental-materialized-cache-scaling-report` — unrelated-data size
@@ -53,7 +56,7 @@ recommending `LogReader` tail with ts-grouped atomic apply).
   `incremental-materialized-cache-validated-id-join-edges` and
   `incremental-materialized-cache-reverse-join-index` with
   `incremental-materialized-cache-missing-target-join-semantics`
-  (`incremental-materialized-cache-dangling-typed-reference`, `Unknown`
+  (`incremental-materialized-cache-dangling-typed-reference`, `null`-sender
   fallback, cf. 1c vehicle `convex/chat.ts`); view scoped per
   `incremental-materialized-cache-preregistered-room-message-feed`;
   handshake per

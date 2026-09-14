@@ -52,11 +52,16 @@ one atomic Skip write with no bridge diffing. Pairs with convex-backend
 `examples/convex_reactive/skip/service.ts:34-87,151-163`: one `workspace`
 external collection → `ProjectsOnly`/`TasksOnly` split →
 `TasksByProject.map` → `AddTaskTotals.reduce` (with inverse `remove`) →
-`AttachTotals` join. 1a keeps this graph and swaps only the source: raw
-`/api/sync` Transition applier in place of `ConvexClient.onUpdate` +
-`diffSnapshot`. Cross-table aggregate for the demo is per-project
-task counts/effort sums; correctness is an independent Convex reader at
-settled checkpoints, never Skip-internal consistency.
+`AttachTotals` join — the mapper/reducer topology a 1a proof reuses,
+repointed at the five-table contract. 1a keeps this graph shape and swaps
+only the source: raw `/api/sync` Transition applier in place of
+`ConvexClient.onUpdate` + `diffSnapshot`. The demo computes the Shared
+proof-vehicle contract's canonical room feed plus per-message `likeCount`
+(a membership-change + like-add transaction is the atomicity acceptance);
+correctness is the independent native reader implementing that contract
+at settled checkpoints, never Skip-internal consistency. The local
+projects/tasks `workspace` stays a mechanism demo, not the proof
+vehicle.
 
 ## Costs stated up front
 

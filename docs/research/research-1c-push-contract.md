@@ -59,9 +59,14 @@ seam choice settled per direction by the Data Sync note).
   `data-sync-push-bounded-stream-backpressure` are out of Skip scope;
   Skip owns `data-sync-push-u-implement-push-service` /
   `data-sync-push-u-retained-graph-comparison-harness` above).
-- Convex side: `convex-tutorial convex/chat.ts,schema.ts,chat.test.ts`
-  (`messages.user:v.id(users)`, `Unknown` fallback for dangling refs,
-  cf. `data-sync-push-u-deterministic-tutorial-mutations`).
+- Convex side: tutorial `convex/schema.ts` + `convex/chat.ts` gain the
+  shared rooms/memberships/likes fixture fields, deterministic mutations
+  (sender rename, membership activation/deactivation, like add/remove,
+  dangling sender, membership+likes multi-table transaction), the bounded
+  canonical-result query, and the all-selected-rows baseline
+  (cf. `data-sync-push-u-deterministic-tutorial-mutations`). Missing
+  senders stay `null` (nullable-sender parity, not `"Unknown"`); missing
+  liked users keep their like row in the count.
 - Results: `bench/compare.ts` JSONL
   (`data-sync-push-ktd-diagnostic-jsonl-schema`, same units as 1b),
   `RESULTS.md` with N/K/F curves, scan-amplification, freshness chain
