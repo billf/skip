@@ -20,7 +20,7 @@ graph TD
     PQ[Shared P/Q plan] --> S1[1a sync-protocol client]
     PQ --> S2[1b paginated source]
     PQ -. conditional .-> S3[1c push source]
-    Q12[shared-prereqs-q-language-neutral-methodology-spec] -. spec only .-> D2[Direction 2 cache]
+    SPEC[shared-prereqs-q-language-neutral-methodology-spec] -. spec only .-> D2[Direction 2 cache]
 ```
 
 ## 1a sync-protocol client

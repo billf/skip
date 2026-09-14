@@ -29,8 +29,8 @@ seam choice settled per direction by the Data Sync note).
   join+reducer graph (`TasksByProject`/`AddTaskTotals` shape in
   `examples/convex_reactive/skip/service.ts:51-87`) applies add/remove
    incrementally. Steady-state delivery/input `O(K)` + derived `O(K+F)`
-  vs `O(N)` snapshot — the only spike allowed `O()` notation in its
-  scaling-notation requirement (1c R16, local-only).
+  vs `O(N)` snapshot per `data-sync-push-scaling-by-n-k-f` — the only
+  spike allowed `O()` notation in its scaling rule.
 - Keying: `(component,table,_id)` → Skip string key; in-value `ts`
   watermark (not session tick); tombstones `[key,[]]` with GC +
   generation-fencing/pending-ledger per
@@ -53,15 +53,26 @@ seam choice settled per direction by the Data Sync note).
   plus `examples/convex_reactive/skip/service.ts` one-atomic-call
   workaround; 1c adds `adapters/convex/src/data_sync_push.ts(.test.ts)`
   and `examples/convex_data_sync_push/{shared/model,skip/service+server,
-  bench/compare}` per the plan's units (U1-U3/U5 backend/tutorial out of
-  Skip scope; Skip owns U4/U6 above).
+  bench/compare}` per the plan's units (backend selection/cursor
+  per `data-sync-push-fixed-selection-cursor`, emission per
+  `data-sync-push-progress-driven-page-emission`, backpressure per
+  `data-sync-push-bounded-stream-backpressure` are out of Skip scope;
+  Skip owns `data-sync-push-u-implement-push-service` /
+  `data-sync-push-u-retained-graph-comparison-harness` above).
 - Convex side: `convex-tutorial convex/chat.ts,schema.ts,chat.test.ts`
   (`messages.user:v.id(users)`, `Unknown` fallback for dangling refs,
   cf. `data-sync-push-u-deterministic-tutorial-mutations`).
 - Results: `bench/compare.ts` JSONL
   (`data-sync-push-ktd-diagnostic-jsonl-schema`, same units as 1b),
-  `RESULTS.md` with N/K/F curves, scan-amplification, and freshness chain
-  `commit→readable→delivered→applied→published`.
+  `RESULTS.md` with N/K/F curves, scan-amplification, freshness chain
+  `commit→readable→delivered→applied→published`, counters per
+  `data-sync-push-wake-and-work-counters`, timers per
+  `data-sync-push-freshness-latency-timers`, staging per
+  `data-sync-push-staging-generation-activation`, replacement per
+  `data-sync-push-atomic-table-replacement`, recovery per
+  `data-sync-push-reconnect-and-cold-recovery` /
+  `data-sync-push-terminal-error-freshness-safety`, quiescence per
+  `data-sync-push-quiescent-empty-recheck`.
 
 Probe: seeded revision-group replay (duplicate + gap injection) against
 the retained graph; assert idempotent apply and `O(K)` delivery sizes
@@ -71,6 +82,18 @@ independent of N.
 
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
   (`data-sync-push-atomic-revision-group-apply`,
+  `data-sync-push-fixed-selection-cursor`,
+  `data-sync-push-progress-driven-page-emission`,
+  `data-sync-push-quiescent-empty-recheck`,
+  `data-sync-push-bounded-stream-backpressure`,
+  `data-sync-push-staging-generation-activation`,
+  `data-sync-push-atomic-table-replacement`,
+  `data-sync-push-generation-scoped-replay-idempotency`,
+  `data-sync-push-reconnect-and-cold-recovery`,
+  `data-sync-push-terminal-error-freshness-safety`,
+  `data-sync-push-scaling-by-n-k-f`,
+  `data-sync-push-wake-and-work-counters`,
+  `data-sync-push-freshness-latency-timers`,
   `data-sync-push-ktd-generation-fenced-ingestion`,
   `data-sync-push-ktd-single-collection-tagged-keys`,
   `data-sync-push-ktd-scoped-replay-watermarks`,
