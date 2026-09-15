@@ -42,7 +42,13 @@ seam choice settled per direction by the Data Sync note).
   to avoid heap clobbering).
 - Cursor-after-apply checkpointing with revision-watermark idempotency;
   duplicate/gap/retention/compaction behavior per the push-stream seam
-   note. `data-sync-push-u-implement-push-service` /
+   note. Publication states per
+  `research-publication-state-semantics.md`: snapshotting (no candidate)
+  → stale / replacing-keeps-last-good → current after final group +
+  cursor; versioned `error` freezes the watermark (cold-or-resume per
+  retryable flag). Cursor-specific metrics per
+  `research-core-metric-profile.md` (resets, replayed/ignored, wake-ups
+  by cause, suppressed refreshes). `data-sync-push-u-implement-push-service` /
   `data-sync-push-u-retained-graph-comparison-harness` depend on shared
   P/Q (envelope + comparator) from plan `1159`, with hand-build fallback
   if P/Q has not landed.
@@ -85,6 +91,10 @@ independent of N.
 
 ## Sources
 
+- `convex-backend/research/skip-convex-integration/research-publication-state-semantics.md`
+  (snapshotting/stale/replacing/current + versioned-error mapping)
+- `convex-backend/research/skip-convex-integration/research-core-metric-profile.md`
+  (cursor-specific extension)
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
   (`data-sync-push-atomic-revision-group-apply`,
   `data-sync-push-fixed-selection-cursor`,

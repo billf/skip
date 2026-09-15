@@ -50,11 +50,18 @@ recommending `LogReader` tail with ts-grouped atomic apply).
   per `incremental-materialized-cache-independent-correctness-check` via
   `shared-prereqs-q-language-neutral-methodology-spec`; surface
   unchanged per `incremental-materialized-cache-native-surface-unchanged`.
-- Schema: `incremental-materialized-cache-implicit-base-index-views`
+- Index split per `research-static-vs-dynamic-indexes.md`: every
+  direction assumes the static set present + enabled
+  (`memberships.by_room_user`, `messages.by_room`, `likes.by_message`
+  plus per-table `by_id`/`by_creation_time`; 1a plain per-table queries,
+  1b `messages.by_room` pagination, 1c fixed five-table selection).
+  Only Direction 2 tests lifecycle:
+  `incremental-materialized-cache-implicit-base-index-views`
   plus `incremental-materialized-cache-indexed-maintained-lookups` with
-  `incremental-materialized-cache-index-eligibility-validation`;
-  `incremental-materialized-cache-validated-id-join-edges` and
-  `incremental-materialized-cache-reverse-join-index` with
+  `incremental-materialized-cache-index-eligibility-validation` (AE6:
+  staged/removed/disabled/incompatible → ineligible, reason in
+  metrics); `incremental-materialized-cache-validated-id-join-edges`
+  and `incremental-materialized-cache-reverse-join-index` with
   `incremental-materialized-cache-missing-target-join-semantics`
   (`incremental-materialized-cache-dangling-typed-reference`, `null`-sender
   fallback, cf. 1c vehicle `convex/chat.ts`); view scoped per
@@ -72,6 +79,16 @@ recommending `LogReader` tail with ts-grouped atomic apply).
   `by_id/by_creation_time` base views + enabled app indexes + `v.id`
   forward edges / indexed reverse fan-out, per the Dir2 plan.
 
+## Anti-confusion (lifecycle, not index state)
+
+Per `research-static-vs-dynamic-indexes.md`: 1b `InvalidCursor` full
+reset is query-cursor lifecycle; 1c replacement/truncation is Data Sync
+lifecycle (generation swap); 1a `QueryFailed`/`QueryRemoved`/
+not-yet-loaded is subscription state. None implies `_index`
+staged/disabled. Open: whether 1b/1c rebuilds assert "indexes still
+enabled" or that stays D2-only; whether 1b needs any index beyond
+`by_room`.
+
 ## What this adds vs convex-backend notes
 
 Those notes own backend seams, metadata, and harness; this doc is the
@@ -80,6 +97,10 @@ the reducer-with-inverse and combined-domain precedents to copy.
 
 ## Sources
 
+- `convex-backend/research/skip-convex-integration/research-static-vs-dynamic-indexes.md`
+  (static set, D2-only lifecycle, forward/reverse rules, anti-confusion)
+- `convex-backend/research/skip-convex-integration/research-publication-state-semantics.md`
+  (D2 wait-vs-fallback, counted fallback)
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
   (`incremental-materialized-cache-*`, `shared-prereqs-q-*`)
 - Plan `2026-09-10-1702-feat-skip-incremental-materialized-cache-spike-plan.md`
