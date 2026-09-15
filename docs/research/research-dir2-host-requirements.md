@@ -28,9 +28,10 @@ recommending `LogReader` tail with ts-grouped atomic apply).
   (long-lived `Mapper`/`Reducer` graph with inverse `remove`, precedent
   `AddTaskTotals.add/remove` in
   `examples/convex_reactive/skip/service.ts:68-87`); one combined input
-  domain or scoped atomic update per
-  `shared-prereqs-p-single-fork-per-atomic-unit`, backend-native
-  reimplementation (same TS gap as Dir1 — see atomic-write gap doc).
+  domain per `shared-prereqs-p-single-fork-per-atomic-unit`,
+  backend-native reimplementation — the scoped multi-collection
+  alternative is closed per KTD3 and unexecutable on this runtime
+  (`ServiceInstance.update` is single-collection-only).
 - Committed-change feed grouped by transaction with seed/rebuild paths
   and a retention budget; version/health gate on reads with fallback to
   native execution that stays measurable
@@ -89,6 +90,34 @@ staged/disabled. Open: whether 1b/1c rebuilds assert "indexes still
 enabled" or that stays D2-only; whether 1b needs any index beyond
 `by_room`.
 
+## KTD validation matrix (validatable here vs trust upstream)
+
+Per upstream `36f8bfa51` (KTD1-KTD10). Full evidence lands in
+`research-dir2-skip-evidence.md` (this directory), including its path
+convention (short roots expand under `skipruntime-ts/`, except
+`prelude/` under top-level `skiplang/`) — the same convention applies
+to the short paths below. Verdict taxonomy (upstream has no
+provenance taxonomy — its `pass`/`partial` judges document adequacy,
+not where validation lives, so this extends it; gap resurfaced if a
+shared vocabulary appears): `validated here` = checked against this
+checkout's code with quoted lines; `validated premise` = mechanism
+checked here, surrounding policy trusted upstream; `cross-checked` =
+consistent across our docs and the cited code paths; `trust upstream`
+= backend-owned, our docs carry only the contract. One row per KTD:
+
+| KTD | Verdict | Evidence |
+|---|---|---|
+| KTD1 Node-child host | validated here (reframed: Node is the supported, demonstrated surface; direct Rust FFI is unsupported/out-of-scope, not proven impossible — C ABI exists at `addon/src/tojs.cc:9-12`) | `addon/src/common.h:57-73` untyped handles, `addon/src/main.cc:24-33` NAPI-only export, `wasm/src/node.ts` + `skipruntime_init.ts:14-46` JS host requirement |
+| KTD2 LogReader tail | trust upstream | backend-owned write log; Skip-side contract in `convex-backend/research/skip-convex-integration/research-atomic-source-batch.md` |
+| KTD3 `ServiceInstance.update` atomicity | validated here | `core/src/index.ts:772-811` single collection, no `isInit` (`FFI.sk:696` vs `:136`); seed is one update on a fresh generation |
+| KTD4 seed-then-tail, no persistence | validated premise | `Runtime.sk:856` fresh-generation seed, `Context.sk:2418/2467` fork rollback; fence policy itself trust upstream |
+| KTD5 eligibility registries | trust upstream, pattern here | `adapters/convex/src/index.ts:28-60` typed-declaration validation precedent |
+| KTD6 states/reasons | cross-checked | maps onto `research-publication-state-semantics.md`; paths `core:699-765,818-829` |
+| KTD7 view-backed reads | cross-checked | `core:633-693` ephemeral reads, `:719-751` notifier marshaling, `api.ts:133,166,256,625` lazy/eager placement |
+| KTD8 counters | validated here | `api.ts:81-102` remove→null contract, `BaseTypes.sk:23` remove/add loops, `EagerDir.sk:1717-1791` short-circuit + recompute + dirty-marking |
+| KTD9 no fixtures | validated premise | read-only `git -C convex-backend show ba16e0638 --stat` (534 files, 6 insertions, 92820 deletions, 61 test-related files removed) confirms removal; harness shape in `tests/src/tests.ts:64-148` |
+| KTD10 admin endpoints | trust upstream | JS-harness client shape in `helpers/src/remote.ts`, SSE in `server/src/rest.ts:110-165` |
+
 ## What this adds vs convex-backend notes
 
 Those notes own backend seams, metadata, and harness; this doc is the
@@ -102,7 +131,8 @@ the reducer-with-inverse and combined-domain precedents to copy.
 - `convex-backend/research/skip-convex-integration/research-publication-state-semantics.md`
   (D2 wait-vs-fallback, counted fallback)
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
-  (`incremental-materialized-cache-*`, `shared-prereqs-q-*`)
+  (`incremental-materialized-cache-*`, `shared-prereqs-p-*`,
+  `shared-prereqs-q-*`)
 - Plan `2026-09-10-1702-feat-skip-incremental-materialized-cache-spike-plan.md`
 - `examples/convex_reactive/skip/service.ts:51-111`
 - `research-skip-atomic-write-gap.md` (this directory)
