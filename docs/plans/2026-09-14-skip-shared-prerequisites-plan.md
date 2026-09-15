@@ -118,17 +118,30 @@ exactly this reason.)
   Generality: convex-only. Accept: canonical feed compared.
 - `shared-prereqs-q-counter-timer-catalog` — recorder implementing the
   shared catalog (1a populates only detector/dual-reader/comparator).
+  Metric profile per `research-core-metric-profile.md`:
+  rows/bytes, atomic batches, changed keys, dependent/reducer work
+  required 1b/1c/Dir2 and N-A 1a; stale duration optional 1b / required
+  1c/Dir2; mismatch everywhere; fallback Dir2-only. Collision map
+  (delivered rows/bytes, keys reconciled, rebuilds, publication, atomic
+  unit) plus page/cursor/index-gating extensions.
   Generality: generic.
   Accept: same names/units across spikes.
 - `shared-prereqs-q-fault-injection-fixture` — common faults
   (disconnect, cursor expiry, table replacement, oversized txn, etc).
+  Fault→state assertions per
+  `research-publication-state-semantics.md`: freeze vs blank vs
+  not-yet-loaded; never partial-as-current; 1b has no terminal-error
+  (stale-window instead), D2 error is counted fallback.
   Generality: generic fixture, convex-only fault list.
   Accept: 1a/1b/1c subsets run.
 - `shared-prereqs-q-fault-assertion-helper` — detect/recover/count
   helpers. Generality: generic. Accept: helpers reused, not rewritten.
 - `shared-prereqs-q-self-test-seeded-mismatches` — seeded wrong snapshot
-  proves comparator fails loudly. Generality: generic. Accept: self-test
-  fails before fix, passes after.
+  proves comparator fails loudly, built on shared vectors V1–V6 per
+  `research-semantic-test-vectors.md` (dangling sender, membership flip,
+  like add/remove, 51-row boundary, deletes, atomic txn) with
+  manifest-pinned vector-set version. Generality: generic. Accept:
+  self-test fails before fix, passes after.
 - `shared-prereqs-q-runnable-reference-source` — end-to-end before spikes
   exist. Generality: generic. Accept: runs on PoC vehicle alone.
 - `shared-prereqs-q-report-format` — counts/timers/mismatch log consumable
@@ -137,7 +150,13 @@ exactly this reason.)
   `data-sync-push-ktd-diagnostic-jsonl-schema`.
   Generality: convex-only. Accept: 1c consumes without translation.
 - `shared-prereqs-q-language-neutral-methodology-spec` — settled
-  definition, normalization, counter names, language-neutral.
+  definition, normalization, counter names, language-neutral, plus the
+  four checkpoint gates per `research-logical-checkpoint-contract.md`
+  (batch applied, result published, oracle observed, freshness
+  recorded) with per-direction bindings and failure-exclusion rules
+  (failure checkpoints never settled; `SplitRequired`/partial never
+  current; post-header failures freeze watermarks; abandoned reads are
+  non-comparisons).
   Generality: generic. Accept: Direction 2 implements natively against it.
 
 ## Non-goals
@@ -149,6 +168,10 @@ batch primitive.
 ## Sources
 
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
+- `convex-backend/research/skip-convex-integration/research-core-metric-profile.md`
+- `convex-backend/research/skip-convex-integration/research-logical-checkpoint-contract.md`
+- `convex-backend/research/skip-convex-integration/research-publication-state-semantics.md`
+- `convex-backend/research/skip-convex-integration/research-semantic-test-vectors.md`
 - `convex-backend/docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md`
 - `docs/research/research-shared-PQ-skip-shape.md`,
   `research-skip-atomic-write-gap.md`, `research-convex-adapter-v1.md`,

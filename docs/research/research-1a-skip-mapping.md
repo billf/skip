@@ -42,10 +42,13 @@ one atomic Skip write with no bridge diffing. Pairs with convex-backend
   `sync-protocol-client-atomic-cross-table-update` /
   `sync-protocol-client-stale-last-good-on-failure`, vehicle
   `sync-protocol-client-chatroom-tutorial-proof`, record
-  `sync-protocol-client-bounded-feasibility-record`. On rejected
-  `callbacks.update`, tear down and re-establish as a fresh initial
-  snapshot (convex adapter `resubscribe():274-305`), never a partial
-  diff. Reconnect snapshot follows the same path.
+  `sync-protocol-client-bounded-feasibility-record`. Publication states
+  per `research-publication-state-semantics.md`: not-yet-loaded (no
+  prior good) vs frozen-stale (prior good, known-behind) vs FatalError
+  distinct from frozen-stale; failure checkpoints never count as
+  settled. On rejected `callbacks.update`, tear down and re-establish
+  as a fresh initial snapshot (convex adapter `resubscribe():274-305`),
+  never a partial diff. Reconnect snapshot follows the same path.
 
 ## Skip vehicle to reuse
 
@@ -78,6 +81,8 @@ merged into one domain.
 
 ## Sources
 
+- `convex-backend/research/skip-convex-integration/research-publication-state-semantics.md`
+  (not-yet-loaded vs frozen-stale vs FatalError mapping)
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
   (`sync-protocol-client-direct-readonly-sync-client`,
   `sync-protocol-client-snapshot-reconciliation`,

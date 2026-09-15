@@ -68,7 +68,10 @@ graph TD
   bootstrap/inserts/updates/deletes/multi-table/restart/lag/recovery.
 - `incremental-materialized-cache-dangling-typed-reference` — `v.id`
   join hints with dangling-reference parity (`null` sender, never integrity
-  guarantee; reverse joins need enabled app index).
+  guarantee; reverse joins need enabled app index) per
+  `research-static-vs-dynamic-indexes.md`: static contract set assumed
+  enabled everywhere; staged/removed/disabled/incompatible → ineligible
+  (AE6) is Direction-2-only lifecycle testing.
   Generality: convex-only. Accept: missing targets preserve native
   behavior.
 
@@ -81,6 +84,8 @@ no multi-view generalization, no Skip-specific app APIs.
 ## Sources
 
 - `convex-backend/docs/plans/IDENTIFIER-MAP.md`
+- `convex-backend/research/skip-convex-integration/research-static-vs-dynamic-indexes.md`
+  (static set, D2-only lifecycle, AE6 gate)
 - `convex-backend/docs/plans/2026-09-10-1702-feat-skip-incremental-materialized-cache-spike-plan.md`
 - `docs/research/research-dir2-host-requirements.md`
 - `docs/research/research-skip-atomic-write-gap.md`
