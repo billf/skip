@@ -37,7 +37,7 @@ scaling report
 (`incremental-materialized-cache-accelerated-handshake`).
 `shared-prereqs-q-language-neutral-methodology-spec` is the only
 adoptable shared artifact; P/Q TypeScript code is not imported.
-Upstream `IDENTIFIER-MAP.md:152-169` confirms these rows resolve.
+Upstream `IDENTIFIER-MAP.md:135-140` confirms these rows resolve.
 
 ## Sources
 
