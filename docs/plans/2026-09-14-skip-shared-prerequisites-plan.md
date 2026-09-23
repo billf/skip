@@ -4,6 +4,7 @@ type: plans-prerequisites
 status: draft
 direction: cross-cutting
 date: 2026-09-14
+reconciled: 2026-09-23
 ---
 
 # Skip shared prerequisites
@@ -13,6 +14,35 @@ Skip-side build of the P envelope library and Q comparator harness that
 specifies. All cross-document identifiers below are the descriptive
 anchors from `convex-backend/docs/plans/IDENTIFIER-MAP.md` — never bare
 numbers. Skip-local additions use `skip-{concept}` slugs defined here.
+
+## Reconciliation (2026-09-23)
+
+Reconciled baseline: this file at commit `a802b744`. The convex-backend
+plan is now implementation-ready, and its Planning Contract settles where
+this work lives:
+
+- P: workspace package `@skip-adapter/atomic-batch` at
+  `skipruntime-ts/adapters/atomic-batch/` (convex-backend plan KTD1).
+- Q: private workspace package `skip-convex-proof-harness` at
+  `examples/convex_proof_harness/`, an in-process library, not a
+  comparator server (KTD2). Its reference service uses `initService`
+  with loopback-bound routes that mirror `server/src/rest.ts`, because
+  `runService` listens on all interfaces.
+- Q13's fixture stays in `convex-tutorial` under `convex/proofVehicle/`
+  (KTD3); Q calls it by function name.
+
+Units: `shared-prereqs-u-p-contract-scaffold` (U1) through
+`shared-prereqs-u-report-schemas` (U12) are the snapshot
+baseline; `shared-prereqs-u-revision-delta-extension` (U13),
+`shared-prereqs-u-revision-delta-fault-tier` (U14), and
+`shared-prereqs-u-revision-delta-reference-run` (U15) are the
+revision-delta tier; `shared-prereqs-u-methodology-spec` (U16,
+Q12's METHODOLOGY.md for Direction 2) gates neither tier. Anchors are in
+`convex-backend/docs/plans/IDENTIFIER-MAP.md`. Building
+`@skipruntime/wasm` (Skiplang toolchain) is a prerequisite for the
+runtime-backed units. `skip-teardown-serialization` and
+`skip-structured-logging-latency` remain Skip-local follow-ons outside
+U1-U16.
 
 ## Dependencies
 
@@ -235,7 +265,11 @@ exactly this reason.)
   proven on Q9's reference run. Each direction reuses it, supplying
   only its atomic group (1a Transition, 1b page-region swap, 1c
   exact-`ts` group); Direction 2 implements the equivalent from the
-  methodology spec.
+  methodology spec. For V6 the observer watches a `groupProbe` resource
+  (`{active, likeCount}` per message, before the membership filter)
+  alongside the feed, because a membership-first tear already equals the
+  feed's final empty output; both write orders must be detectable
+  (`shared-prereqs-u-no-torn-observer`).
   Generality: generic observer, convex-only vehicle. Accept: live
   no-torn assertions pass per direction.
 
