@@ -18,3 +18,23 @@ export const ATOMIC_BATCH_VERSION = "0.0.23";
 
 /** Re-exported for consumers building batch entries against this package. */
 export type { Entry, Json };
+
+export {
+  assertNoDuplicateKeys,
+  compareOrderKeyDesc,
+  namespacedKey,
+  type OrderKey,
+} from "./keys.js";
+export {
+  applySnapshotBatch,
+  buildSnapshotEntries,
+  type SnapshotEntry,
+  type Writer,
+} from "./snapshot.js";
+export {
+  CONTROL_COMPONENT,
+  MARKER_TABLE,
+  SplitByTable,
+  type RevisionEnvelope,
+  type TaggedRow,
+} from "./split.js";
