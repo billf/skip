@@ -12,6 +12,7 @@
     "skipruntime-ts/helpers",
     "skipruntime-ts/wasm",
     "skipruntime-ts/addon",
+    "skipruntime-ts/adapters/atomic-batch",
     "skipruntime-ts/adapters/convex",
     "skipruntime-ts/adapters/kafka",
     "skipruntime-ts/adapters/postgres",
