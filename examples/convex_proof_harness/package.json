@@ -1,0 +1,25 @@
+{
+  "name": "skip-convex-proof-harness",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.test.tsbuildinfo",
+    "lint": "eslint",
+    "test": "npm run typecheck && tsx --test src/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "author": "SkipLabs",
+  "license": "MIT",
+  "description": "Provisional correctness-comparator and fault-injection harness for the shared Skip/Convex proof vehicle",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@skipruntime/core": "0.0.23"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13"
+  }
+}
