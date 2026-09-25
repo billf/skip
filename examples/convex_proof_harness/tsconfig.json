@@ -1,0 +1,9 @@
+{
+	"extends": "@skiplabs/tsconfig",
+	"exclude": [
+		"src/**/*.test.ts"
+	],
+	"include": [
+		"src/**/*.ts"
+	]
+}

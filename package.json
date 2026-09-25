@@ -23,6 +23,7 @@
     "sql/ts",
     "sql/ts/tests",
     "examples/cache_invalidation/edge_service",
+    "examples/convex_proof_harness",
     "examples/convex_reactive",
     "examples/convex_tanstack",
     "examples/hackernews/reactive_service",
