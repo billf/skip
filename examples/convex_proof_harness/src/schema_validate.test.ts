@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -12,6 +13,48 @@ const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "schema")
 function loadSchema(name: string): JsonSchema {
 	return JSON.parse(readFileSync(join(SCHEMA_DIR, name), "utf8")) as JsonSchema;
 }
+
+/**
+ * Pinned canonical-shape hashes (U16 finding #5): a schema-shape edit
+ * (added/removed/renamed property, changed required/enum) changes the
+ * hash and fails this test, forcing the author to bump `schemaVersion`
+ * and record the new hash together -- the "version together" guarantee
+ * in METHODOLOGY.md made mechanical. Canonical form is key-sorted JSON;
+ * formatting-only edits do not change the hash.
+ */
+const EXPECTED_SCHEMA_SHAPE_HASHES: Record<string, string> = {
+	"report.schema.json":
+		"2a7a25f843ad23766ec159425d8b57a47f7834e3e6e1978e62a00be981868d01",
+	"mismatch.schema.json":
+		"158b00eca8d399b9943fe2e0c5f9264059b405b6965ec0f655fd9545fd72611f",
+};
+
+test("schema shapes match their pinned hashes (bump schemaVersion + hashes together on shape change)", () => {
+	const canonicalize = (value: unknown): unknown => {
+		if (Array.isArray(value)) return value.map(canonicalize);
+		if (value !== null && typeof value === "object") {
+			const out: Record<string, unknown> = {};
+			for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+				out[key] = canonicalize((value as Record<string, unknown>)[key]);
+			}
+			return out;
+		}
+		return value;
+	};
+	for (const [name, expected] of Object.entries(EXPECTED_SCHEMA_SHAPE_HASHES)) {
+		const raw = readFileSync(join(SCHEMA_DIR, name), "utf8");
+		const actual = createHash("sha256").update(JSON.stringify(canonicalize(JSON.parse(raw)))).digest("hex");
+		assert.equal(actual, expected, `${name} shape changed: bump schemaVersion and record the new hash`);
+	}
+});
+
+test("both schemas carry an $id and a schemaVersion for U16 to reference by version", () => {
+	for (const name of ["report.schema.json", "mismatch.schema.json"]) {
+		const raw = JSON.parse(readFileSync(join(SCHEMA_DIR, name), "utf8")) as { $id?: string; schemaVersion?: string };
+		assert.equal(typeof raw.$id, "string");
+		assert.equal(raw.schemaVersion, "1.0.0");
+	}
+});
 
 test("U7's report fixture (a full checkpoint record) validates against report.schema.json", () => {
 	const schema = loadSchema("report.schema.json");
