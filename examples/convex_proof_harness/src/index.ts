@@ -52,3 +52,33 @@ export {
 	type FreshnessDisposition,
 	type MetricSample,
 } from "./recorder.js";
+
+export {
+	SseParseError,
+	SseFrameSplitter,
+	SseReader,
+	assertLoopbackUrl,
+	classifyFrame,
+	type Entry,
+	type SseEvent,
+	type SseRawFrame,
+	type SseReaderCallbacks,
+} from "./sse_reader.js";
+
+export {
+	NativeReader,
+	admitNativeSample,
+	type NativeReadAdmission,
+	type NativeReadResult,
+	type OneShotReader,
+} from "./native_reader.js";
+
+export {
+	EXPECTED_FIXTURE_SET_VERSION,
+	PARITY_HASH_ALGORITHM,
+	assertParityMatch,
+	computeParity,
+	loadVendoredParity,
+	type TableParity,
+	type VendoredParity,
+} from "./parity.js";
