@@ -62,3 +62,16 @@ export {
   type RoomFeedRow,
   type UserDoc,
 } from "./room_feed.js";
+export {
+  GenerationManager,
+  PendingPageLedger,
+  StagingBuild,
+  type GenerationId,
+} from "./generation.js";
+export {
+  RevisionDeltaApplier,
+  RevisionDeltaSource,
+  compareTs,
+  type ApplyResult,
+  type RevisionDeltaEntry,
+} from "./revision_delta.js";
