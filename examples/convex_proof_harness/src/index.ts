@@ -22,3 +22,33 @@ export {
 } from "./corpus.js";
 
 export { compareFeeds, type Mismatch } from "./comparator.js";
+
+export {
+	CATALOG,
+	DIRECTION_TAGGED_METRICS,
+	lookupMetric,
+	requirementFor,
+	requiredMetricsFor,
+	type Direction,
+	type MetricCatalogEntry,
+	type MetricKind,
+	type MetricRequirement,
+} from "./catalog.js";
+
+export { CheckpointEmitter, formatCheckpointFrame, type CheckpointSink } from "./checkpoint.js";
+
+export {
+	HarnessError,
+	QuiescedWriteCoordinator,
+	ReadinessDetector,
+	type Discipline,
+	type Gate1Event,
+	type Gate2Event,
+} from "./readiness.js";
+
+export {
+	Recorder,
+	type CheckpointRecord,
+	type FreshnessDisposition,
+	type MetricSample,
+} from "./recorder.js";
