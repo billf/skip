@@ -82,3 +82,10 @@ export {
 	type TableParity,
 	type VendoredParity,
 } from "./parity.js";
+
+export {
+	NoTornObserver,
+	extractWatchedValue,
+	type TornObservation,
+	type WatchedGroup,
+} from "./observer.js";
