@@ -103,3 +103,5 @@ export {
 	type FaultInjector,
 	type PublicationState,
 } from "./faults/index.js";
+
+export { validate, type JsonSchema, type SchemaValidationError } from "./schema_validate.js";
