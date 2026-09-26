@@ -1,0 +1,15 @@
+{
+	"$id": "https://skip-convex-proof-harness/schema/mismatch.schema.json",
+	"title": "Q3 comparator mismatch record",
+	"description": "One structured mismatch returned by comparator.ts's compareFeeds. A candidate for the interface Direction 2's review entry asks for -- not a claimed shared interface. Only vector/key/field are required: for a presence mismatch (field \"presence\") the absent side is undefined in memory, so a JSON round-trip drops that key (and a null actual row stays null); requiring expected/actual would make round-tripped presence mismatches fail their own schema. This validator subset has no if/then, so conditional-required per field value is not expressible -- expected/actual are optional here.",
+	"type": "object",
+	"required": ["vector", "key", "field"],
+	"additionalProperties": false,
+	"properties": {
+		"vector": { "type": "string" },
+		"key": { "type": ["string", "null"] },
+		"field": { "type": "string" },
+		"expected": {},
+		"actual": {}
+	}
+}

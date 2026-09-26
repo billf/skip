@@ -1,0 +1,54 @@
+{
+	"$id": "https://skip-convex-proof-harness/schema/report.schema.json",
+	"title": "Q10/Q11 checkpoint report record",
+	"description": "One JSONL line written by recorder.ts's Recorder for one checkpoint. A candidate for the interface Direction 2's review entry asks for -- not a claimed shared interface. Every 'name' in 'metrics' must be one of catalog.ts's Q11 catalog names for this build; this schema does not itself enumerate them (the catalog is the single authority, per Q11), so a schema-only check cannot catch a renamed metric on its own -- see the accompanying dependency-surface and catalog-name tests.",
+	"type": "object",
+	"required": ["event", "direction", "version", "freshness", "metrics"],
+	"additionalProperties": false,
+	"properties": {
+		"event": { "type": "string", "enum": ["checkpoint"] },
+		"direction": { "type": "string", "enum": ["1a", "1b", "1c", "D2"] },
+		"version": { "type": "number" },
+		"freshness": {
+			"oneOf": [
+				{
+					"type": "object",
+					"required": ["kind"],
+					"additionalProperties": false,
+					"properties": { "kind": { "type": "string", "enum": ["current"] } }
+				},
+				{
+					"type": "object",
+					"required": ["kind", "reason"],
+					"additionalProperties": false,
+					"properties": {
+						"kind": { "type": "string", "enum": ["stale-with-reason"] },
+						"reason": { "type": "string" }
+					}
+				},
+				{
+					"type": "object",
+					"required": ["kind", "reason"],
+					"additionalProperties": false,
+					"properties": {
+						"kind": { "type": "string", "enum": ["fallback-with-reason"] },
+						"reason": { "type": "string" }
+					}
+				}
+			]
+		},
+		"metrics": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"required": ["name", "value"],
+				"additionalProperties": false,
+				"properties": {
+					"name": { "type": "string" },
+					"value": { "type": "number" },
+					"representation": { "type": "string", "enum": ["snapshot-rows", "revisions"] }
+				}
+			}
+		}
+	}
+}
