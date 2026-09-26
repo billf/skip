@@ -2,7 +2,7 @@
  * Q1's readiness detector: gates one (source group applied) and two
  * (derived result published) only. It never reads the native oracle (gate
  * three is Q2's) and never records freshness (gate four is Q5's).
- * docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md, U7,
+ * docs/plans/2026-09-14-skip-shared-prerequisites-plan.md, U7,
  * Q1, Q12, KTD4.
  */
 

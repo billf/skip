@@ -11,6 +11,7 @@
  */
 
 import type { FeedRow } from "./corpus.js";
+import { deepEqual } from "./deep_equal.js";
 
 export type Mismatch = {
 	vector: string;
@@ -56,18 +57,6 @@ function fieldMismatches(
 	checkField("likeCount", expected.likeCount, actual["likeCount"]);
 	checkField("sender", expected.sender, normalizeSender(actual["sender"]));
 	return mismatches;
-}
-
-function deepEqual(a: unknown, b: unknown): boolean {
-	if (a === b) return true;
-	if (a === null || b === null) return false;
-	if (typeof a !== "object" || typeof b !== "object") return false;
-	const aKeys = Object.keys(a as Record<string, unknown>);
-	const bKeys = Object.keys(b as Record<string, unknown>);
-	if (aKeys.length !== bKeys.length) return false;
-	return aKeys.every((k) =>
-		deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
-	);
 }
 
 /**
