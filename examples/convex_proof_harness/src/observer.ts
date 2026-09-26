@@ -11,16 +11,7 @@
 
 import type { Entry } from "./sse_reader.js";
 import { HarnessError } from "./readiness.js";
-
-function deepEqual(a: unknown, b: unknown): boolean {
-	if (a === b) return true;
-	if (a === null || b === null || a === undefined || b === undefined) return false;
-	if (typeof a !== "object" || typeof b !== "object") return false;
-	const aKeys = Object.keys(a as Record<string, unknown>);
-	const bKeys = Object.keys(b as Record<string, unknown>);
-	if (aKeys.length !== bKeys.length) return false;
-	return aKeys.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
-}
+import { deepEqual } from "./deep_equal.js";
 
 /**
  * One atomic group to watch: a resource name plus the pre- and post-state

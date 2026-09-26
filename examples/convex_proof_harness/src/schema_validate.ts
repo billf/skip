@@ -1,3 +1,5 @@
+import { deepEqual } from "./deep_equal.js";
+
 /**
  * A minimal, dependency-free JSON Schema (draft-07 subset) validator, just
  * large enough for `schema/report.schema.json` and
@@ -20,15 +22,6 @@ export type JsonSchema = {
 };
 
 export type SchemaValidationError = { readonly path: string; readonly message: string };
-
-function deepEqual(a: unknown, b: unknown): boolean {
-	if (a === b) return true;
-	if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
-	const aKeys = Object.keys(a as Record<string, unknown>);
-	const bKeys = Object.keys(b as Record<string, unknown>);
-	if (aKeys.length !== bKeys.length) return false;
-	return aKeys.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
-}
 
 function matchesType(type: string, value: unknown): boolean {
 	switch (type) {

@@ -2,7 +2,7 @@
  * Q5's recorder: owns checkpoint gate four (the freshness disposition) and
  * writes one JSONL record per checkpoint, validating every metric name and
  * every direction's required/optional/not-applicable profile against
- * KTD6's catalog (catalog.ts). docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md,
+ * KTD6's catalog (catalog.ts). docs/plans/2026-09-14-skip-shared-prerequisites-plan.md,
  * U7, Q5, Q10, Q11.
  */
 

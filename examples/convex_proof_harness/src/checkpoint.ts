@@ -5,7 +5,7 @@
  * stream only when its output changes, so a step with no output change
  * publishes nothing on the feed; the checkpoint emitter is how such a step
  * still settles for a reader watching only published output.
- * docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md, U7,
+ * docs/plans/2026-09-14-skip-shared-prerequisites-plan.md, U7,
  * KTD4.
  */
 
