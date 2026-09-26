@@ -89,3 +89,17 @@ export {
 	type TornObservation,
 	type WatchedGroup,
 } from "./observer.js";
+
+export {
+	FaultAssertionError,
+	FaultHarness,
+	disconnectBeforeCheckpointFault,
+	multiTableTransactionFault,
+	notYetLoadedFault,
+	queryFailedFault,
+	queryRemovedFault,
+	slowConsumerBacklogExhaustionFault,
+	type BaselineExpectedState,
+	type FaultInjector,
+	type PublicationState,
+} from "./faults/index.js";
