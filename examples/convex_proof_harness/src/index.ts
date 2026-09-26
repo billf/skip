@@ -91,14 +91,22 @@ export {
 } from "./observer.js";
 
 export {
+	DATA_SYNC_SOFT_LIMITS,
 	FaultAssertionError,
 	FaultHarness,
+	cursorAheadFault,
+	cursorExpiredFault,
+	cursorInvalidFault,
 	disconnectBeforeCheckpointFault,
+	exceedsDataSyncSoftLimits,
 	multiTableTransactionFault,
 	notYetLoadedFault,
+	oversizedTransactionFault,
 	queryFailedFault,
 	queryRemovedFault,
+	restartMidCdcFault,
 	slowConsumerBacklogExhaustionFault,
+	tableReplacementFault,
 	type BaselineExpectedState,
 	type FaultInjector,
 	type PublicationState,
