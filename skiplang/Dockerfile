@@ -14,14 +14,17 @@ FROM debian:bookworm-20260713-slim AS base
 ARG LLVM_VERSION=20
 ARG TARGETARCH
 
-# Install LLVM via apt repository with signed GPG key
-RUN --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
+# Install LLVM via apt repository, signed by the LLVM key committed at
+# bin/llvm-snapshot.gpg.key (see bin/apt-install.sh for why it is not
+# downloaded). Retries match bin/apt-install.sh.
+RUN --mount=type=bind,source=./bin/llvm-snapshot.gpg.key,target=/tmp/llvm-snapshot.gpg.key \
+    --mount=type=cache,id=apt-cache-$TARGETARCH,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-$TARGETARCH,target=/var/lib/apt/lists,sharing=locked \
+    echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
     apt-get update --quiet && \
-    apt-get install --quiet --yes --no-install-recommends ca-certificates make wget && \
-    mkdir -p /etc/apt/keyrings && \
-    wget -qO /etc/apt/keyrings/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
-    echo "deb [signed-by=/etc/apt/keyrings/llvm.asc] http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_VERSION} main" > /etc/apt/sources.list.d/llvm.list && \
+    apt-get install --quiet --yes --no-install-recommends ca-certificates make && \
+    install -D -m 0644 /tmp/llvm-snapshot.gpg.key /etc/apt/keyrings/llvm.asc && \
+    echo "deb [signed-by=/etc/apt/keyrings/llvm.asc] https://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-${LLVM_VERSION} main" > /etc/apt/sources.list.d/llvm.list && \
     apt-get update --quiet && \
     apt-get install --quiet --yes --no-install-recommends \
         clang-${LLVM_VERSION} \

@@ -44,11 +44,10 @@ jobs:
       if: matrix.language == 'c-cpp'
       shell: bash
       run: |
-        sudo install -d -m 0755 /etc/apt/keyrings
-        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-          | sudo tee /etc/apt/keyrings/llvm.asc >/dev/null
+        # Committed rather than downloaded; see bin/apt-install.sh.
+        sudo install -D -m 0644 bin/llvm-snapshot.gpg.key /etc/apt/keyrings/llvm.asc
         UBUNTU_CODENAME=$(lsb_release -cs)
-        echo "deb [signed-by=/etc/apt/keyrings/llvm.asc] http://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-20 main" \
+        echo "deb [signed-by=/etc/apt/keyrings/llvm.asc] https://apt.llvm.org/${UBUNTU_CODENAME}/ llvm-toolchain-${UBUNTU_CODENAME}-20 main" \
           | sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
         sudo apt-get update -q
         sudo apt-get install -q -y --no-install-recommends clang-20 lld-20
