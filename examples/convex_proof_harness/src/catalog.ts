@@ -1,15 +1,16 @@
 /**
  * Q11's metric catalog: one TypeScript constant naming every counter/timer
- * the recorder may write, transcribed from
- * research/skip-convex-integration/research-spike-comparison.md and
- * research-core-metric-profile.md's required/optional/not-applicable table.
- * docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md, U7,
+ * the recorder may write, transcribed from the metric-profile and
+ * spike-comparison research (see docs/plans/2026-09-14-skip-shared-
+ * prerequisites-plan.md, U7, KTD6, for the governing references).
+ * docs/plans/2026-09-14-skip-shared-prerequisites-plan.md, U7,
  * KTD6.
  *
  * This is the language authority Q11 requires: no consumer defines its own
  * metric names, and the recorder (recorder.ts) rejects anything not listed
- * here. U12's JSON Schema is generated from this record; it is not written
- * separately from it.
+ * here. U12's JSON Schemas are hand-maintained separately from this
+ * record (there is no codegen step); schema_validate.test.ts pins the
+ * drift-relevant expectations instead.
  */
 
 export type Direction = "1a" | "1b" | "1c" | "D2";

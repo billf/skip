@@ -2,7 +2,7 @@
 
 A correctness-comparator and fault-injection harness for the shared
 Skip/Convex proof vehicle defined in
-`docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md`
+`docs/plans/2026-09-14-skip-shared-prerequisites-plan.md`
 (this plan's "Q" sub-deliverable). It builds no spike itself and ships
 its own tests against synthetic and vendored corpus data, with no
 dependency on any consuming spike's code (1a, 1b, 1c, or Direction 2).

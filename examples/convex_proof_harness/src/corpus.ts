@@ -1,7 +1,7 @@
 /**
  * Loads and verifies the vendored V1-V6 corpus, and resolves its `Out(...)`
  * rows into comparable feed rows through a caller-supplied label-binding
- * map. docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md,
+ * map. docs/plans/2026-09-14-skip-shared-prerequisites-plan.md,
  * U6, KTD5.
  */
 
