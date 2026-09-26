@@ -1,5 +1,6 @@
 {
 	"$id": "https://skip-convex-proof-harness/schema/report.schema.json",
+	"schemaVersion": "1.0.0",
 	"title": "Q10/Q11 checkpoint report record",
 	"description": "One JSONL line written by recorder.ts's Recorder for one checkpoint. A candidate for the interface Direction 2's review entry asks for -- not a claimed shared interface. Every 'name' in 'metrics' must be one of catalog.ts's Q11 catalog names for this build; this schema does not itself enumerate them (the catalog is the single authority, per Q11), so a schema-only check cannot catch a renamed metric on its own -- see the accompanying dependency-surface and catalog-name tests.",
 	"type": "object",
