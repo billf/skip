@@ -28,17 +28,13 @@ import { HarnessError, ReadinessDetector } from "../src/readiness.js";
 import { NativeReader, type NativeReadResult } from "../src/native_reader.js";
 import { SseReader } from "../src/sse_reader.js";
 import { compareFeeds } from "../src/comparator.js";
-import { loadCorpus, resolveExpectedFeed, type CorpusVector } from "../src/corpus.js";
+import { loadCorpus, resolveExpectedFeed, type CorpusVector, type FeedRow } from "../src/corpus.js";
 import { Recorder } from "../src/recorder.js";
 import { NoTornObserver, extractWatchedValue } from "../src/observer.js";
 import { FaultHarness, disconnectBeforeCheckpointFault } from "../src/faults/index.js";
-import {
-	GROUP_PROBE_RESOURCE,
-	ROOM_FEED_RESOURCE,
-	createReferenceService,
-	startReferenceServer,
-	type ReferenceServer,
-} from "./service.js";
+import type { PublicationState } from "../src/faults/state.js";
+import type { FreshnessDisposition } from "../src/recorder.js";
+import { GROUP_PROBE_RESOURCE, ROOM_FEED_RESOURCE, createReferenceService, startReferenceServer, type ReferenceServer } from "./service.js";
 import { ConvexReferenceSource } from "./source.js";
 import { CheckpointEmitter } from "../src/checkpoint.js";
 
@@ -75,6 +71,8 @@ const REST_TS_PATH = join(HERE, "..", "..", "..", "skipruntime-ts", "server", "s
 
 const CONTROL_PORT = 18081;
 const STREAMING_PORT = 18080;
+/** The tutorial loader imports message times at this fixed epoch plus corpus-relative milliseconds. */
+const LOADER_EPOCH_MS = Date.parse("2026-01-01T00:00:00Z");
 
 type ImportTarget = { url: string; adminKey: string };
 
@@ -103,7 +101,11 @@ async function preflightToolchain(): Promise<void> {
 
 function runLoader(vectorId: string, target: ImportTarget): Record<string, string> {
 	const output = execFileSync("npx", ["tsx", LOADER_SCRIPT, vectorId], {
-		env: { ...process.env, CONVEX_URL: target.url, PROOF_VEHICLE_ADMIN_KEY: target.adminKey },
+		env: {
+			...process.env,
+			CONVEX_URL: target.url,
+			PROOF_VEHICLE_ADMIN_KEY: target.adminKey,
+		},
 		encoding: "utf8",
 		timeout: 120_000,
 	});
@@ -111,11 +113,7 @@ function runLoader(vectorId: string, target: ImportTarget): Record<string, strin
 }
 
 function runFixtureReset(target: ImportTarget): void {
-	execFileSync(
-		"npx",
-		["convex", "run", "proofVehicle/fixture:reset", "{}", "--url", target.url, "--admin-key", target.adminKey],
-		{ stdio: "inherit", timeout: 120_000 },
-	);
+	execFileSync("npx", ["convex", "run", "proofVehicle/fixture:reset", "{}", "--url", target.url, "--admin-key", target.adminKey], { stdio: "inherit", timeout: 120_000 });
 }
 
 function resolveLabel(idByLabel: ReadonlyMap<string, string>, label: string): string {
@@ -147,7 +145,10 @@ type SseStream = {
 	reader: SseReader;
 	readiness: ReadinessDetector;
 	transcript: string[];
-	close: () => void;
+	readonly publicationState: PublicationState;
+	readonly rows: readonly unknown[];
+	setRequiredVersion: (version: number) => void;
+	close: () => Promise<void>;
 };
 
 /** Opens an SSE subscription to `resource` (control API instantiate, then streaming API GET), driving `reader`/`readiness`. */
@@ -159,29 +160,54 @@ async function openStream(
 	discipline: "quiesced" | "revision-tagged",
 	onGroupProbeUpdate?: (watermark: string, entries: readonly [unknown, unknown[]][]) => void,
 ): Promise<SseStream> {
-	const instantiateRes = await fetch(`${target.controlUrl}/v1/streams/${resource}`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(params),
-	});
+	let instantiateRes: Response;
+	try {
+		instantiateRes = await fetch(`${target.controlUrl}/v1/streams/${resource}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(params),
+			signal: AbortSignal.timeout(20_000),
+		});
+	} catch (error) {
+		throw new HarnessError(`run.ts: resource "${resource}" instantiation did not complete: ${String(error)}`);
+	}
 	if (!instantiateRes.ok) throw new HarnessError(`run.ts: failed to instantiate resource "${resource}": ${instantiateRes.status}`);
 	const uuid = await instantiateRes.text();
 
-	const readiness = new ReadinessDetector(discipline, requiredVersion);
+	let readiness = new ReadinessDetector(discipline, requiredVersion);
+	const checkpointVersions: number[] = [];
 	const transcript: string[] = [];
 	const controller = new AbortController();
+	let closed = false;
+	let closing = false;
+	let closePromise: Promise<void> | undefined;
+	let hasSnapshot = false;
+	let streamFailure: unknown;
+	const entries = new Map<string, { key: unknown; values: readonly unknown[] }>();
+	const applyEntries = (values: readonly [unknown, unknown[]][], isInit: boolean): void => {
+		if (isInit) entries.clear();
+		for (const [key, rows] of values) {
+			const encoded = JSON.stringify(key);
+			if (rows.length === 0) entries.delete(encoded);
+			else entries.set(encoded, { key, values: rows });
+		}
+		hasSnapshot = true;
+	};
 
 	const reader = new SseReader(target.streamingUrl, {
 		onUpdate: (watermark, values) => {
 			transcript.push(JSON.stringify({ event: "update", id: watermark, data: values }));
+			applyEntries(values as [unknown, unknown[]][], false);
 			onGroupProbeUpdate?.(watermark, values as [unknown, unknown[]][]);
 		},
 		onInit: (watermark, values) => {
 			transcript.push(JSON.stringify({ event: "init", id: watermark, data: values }));
+			applyEntries(values as [unknown, unknown[]][], true);
 			onGroupProbeUpdate?.(watermark, values as [unknown, unknown[]][]);
 		},
 		onCheckpoint: (version) => {
 			transcript.push(JSON.stringify({ event: "checkpoint", data: { version } }));
+			checkpointVersions.push(version);
 			readiness.observeGate2({ kind: "checkpoint", version });
 		},
 		onHeartbeat: () => {},
@@ -190,11 +216,21 @@ async function openStream(
 		},
 	});
 
-	const streamRes = await fetch(`${target.streamingUrl}/v1/streams/${uuid}`, {
-		headers: { Accept: "text/event-stream" },
-		signal: controller.signal,
-	});
+	const headerTimer = setTimeout(() => controller.abort(), 20_000);
+	let streamRes: Response;
+	try {
+		streamRes = await fetch(`${target.streamingUrl}/v1/streams/${uuid}`, {
+			headers: { Accept: "text/event-stream" },
+			signal: controller.signal,
+		});
+	} catch (error) {
+		void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE" });
+		throw new HarnessError(`run.ts: SSE headers for "${resource}" did not arrive within 20s: ${String(error)}`);
+	} finally {
+		clearTimeout(headerTimer);
+	}
 	if (!streamRes.ok || streamRes.body === null) {
+		void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE" });
 		throw new HarnessError(`run.ts: failed to open SSE stream for "${resource}": ${streamRes.status}`);
 	}
 	const bodyReader = streamRes.body.getReader();
@@ -203,32 +239,94 @@ async function openStream(
 		try {
 			for (;;) {
 				const { done, value } = await bodyReader.read();
-				if (done) break;
+				if (done) {
+					if (!closing) streamFailure = new HarnessError(`run.ts: SSE stream for "${resource}" ended unexpectedly`);
+					break;
+				}
 				reader.push(decoder.decode(value, { stream: true }));
 			}
-		} catch {
-			// Aborted on close(); nothing to report.
+		} catch (error) {
+			if (!closing) streamFailure = error;
 		}
 	})();
 
 	return {
 		reader,
-		readiness,
+		get readiness(): ReadinessDetector {
+			return readiness;
+		},
+		setRequiredVersion: (version) => {
+			readiness = new ReadinessDetector(discipline, version);
+			for (const checkpoint of checkpointVersions) readiness.observeGate2({ kind: "checkpoint", version: checkpoint });
+		},
 		transcript,
+		get publicationState(): PublicationState {
+			if (streamFailure !== undefined) return "terminal";
+			if (!hasSnapshot) return "not-yet-loaded";
+			return closed ? "frozen" : "current";
+		},
+		get rows(): readonly unknown[] {
+			return [...entries.values()]
+				.sort((a, b) => {
+					const ak = a.key as readonly [number, string];
+					const bk = b.key as readonly [number, string];
+					return ak[0] - bk[0] || ak[1]!.localeCompare(bk[1]!);
+				})
+				.flatMap((entry) => entry.values);
+		},
 		close: () => {
+			if (closePromise !== undefined) return closePromise;
+			closing = true;
 			controller.abort();
-			void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE" }).catch(() => {});
+			closePromise = (async () => {
+				const response = await fetch(`${target.controlUrl}/v1/streams/${uuid}`, {
+					method: "DELETE",
+					signal: AbortSignal.timeout(20_000),
+				});
+				if (!response.ok) throw new HarnessError(`run.ts: failed to delete stream "${resource}": ${response.status}`);
+				closed = true;
+			})();
+			return closePromise;
 		},
 	};
 }
 
 /** Waits (bounded) for `readiness.gate2` to reach `requiredVersion`. */
-async function awaitGate2(readiness: ReadinessDetector, timeoutMs = 30_000): Promise<void> {
+async function awaitGate2(readiness: ReadinessDetector, timeoutMs = 30_000, stream?: SseStream): Promise<void> {
 	const start = Date.now();
 	while (!readiness.gate2) {
+		if (stream?.publicationState === "terminal") throw new HarnessError("run.ts: SSE stream failed before gate 2 settled");
 		if (Date.now() - start > timeoutMs) {
 			throw new HarnessError(`run.ts: gate 2 did not settle within ${timeoutMs}ms`);
 		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+}
+
+async function awaitPublicationState(stream: SseStream, expected: PublicationState, timeoutMs = 30_000): Promise<void> {
+	const start = Date.now();
+	while (stream.publicationState !== expected) {
+		if (stream.publicationState === "terminal" || Date.now() - start > timeoutMs) {
+			throw new HarnessError(`run.ts: SSE publication state did not reach ${expected}; observed ${stream.publicationState}`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+}
+
+async function awaitTornObservation(observer: NoTornObserver, timeoutMs = 30_000): Promise<void> {
+	const start = Date.now();
+	while (observer.passed) {
+		if (Date.now() - start > timeoutMs) {
+			throw new HarnessError("run.ts: V6 first split write did not publish a torn groupProbe state");
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+}
+
+async function awaitObservedPost(hasPost: () => boolean, timeoutMs = 30_000): Promise<void> {
+	const start = Date.now();
+	while (!hasPost()) {
+		if (Date.now() - start > timeoutMs) throw new HarnessError("run.ts: V6 second split write did not publish the final groupProbe state");
 		await new Promise((resolve) => setTimeout(resolve, 25));
 	}
 }
@@ -248,6 +346,42 @@ function makeNativeReader(ctx: RunContext, room: string): NativeReader {
 			return { version: ts, value };
 		},
 	});
+}
+
+function measuredFreshness(stream: SseStream, requiredVersion: number): FreshnessDisposition {
+	if (stream.reader.unknownEventCount > 0) {
+		return {
+			kind: "stale-with-reason",
+			reason: `${stream.reader.unknownEventCount} unknown SSE event(s)`,
+		};
+	}
+	if (stream.publicationState !== "current") {
+		return {
+			kind: "stale-with-reason",
+			reason: `publication state ${stream.publicationState}`,
+		};
+	}
+	if (!stream.readiness.gate1 || !stream.readiness.gate2 || (stream.readiness.publishedVersion ?? -Infinity) < requiredVersion) {
+		return {
+			kind: "stale-with-reason",
+			reason: `checkpoint before required version ${requiredVersion}`,
+		};
+	}
+	return { kind: "current" };
+}
+
+function requireCurrent(stream: SseStream, requiredVersion: number): FreshnessDisposition {
+	const freshness = measuredFreshness(stream, requiredVersion);
+	if (freshness.kind !== "current") {
+		throw new HarnessError(`run.ts: checkpoint ${requiredVersion} is ${freshness.kind}: ${freshness.reason}`);
+	}
+	return freshness;
+}
+
+function resolveReferenceFeed(rows: readonly import("../src/corpus.js").CorpusOutRow[], labels: ReadonlyMap<string, string>): FeedRow[] {
+	return resolveExpectedFeed(rows, labels)
+		.map((row) => ({ ...row, _creationTime: LOADER_EPOCH_MS + row._creationTime }))
+		.sort((a, b) => b._creationTime - a._creationTime || (a._id < b._id ? 1 : a._id > b._id ? -1 : 0));
 }
 
 /**
@@ -286,65 +420,71 @@ async function runVector(ctx: RunContext, vectorId: string, vector: CorpusVector
 		});
 	}
 
-	console.log(`[reference:snapshot] ${vectorId}: issuing marker and awaiting observation`);
-	const marker = await ctx.source.issueMarkerAndAwaitObservation();
-	const requiredVersion = marker.ts;
-	console.log(`[reference:snapshot] ${vectorId}: gate 1 (marker) satisfied at ts=${requiredVersion}`);
+	const stream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
+	try {
+		console.log(`[reference:snapshot] ${vectorId}: issuing marker and awaiting observation`);
+		const marker = await ctx.source.issueMarkerAndAwaitObservation();
+		const requiredVersion = marker.ts;
+		stream.setRequiredVersion(requiredVersion);
+		console.log(`[reference:snapshot] ${vectorId}: gate 1 (marker) satisfied at ts=${requiredVersion}`);
+		stream.readiness.observeGate1({
+			kind: "source-marker",
+			ackSeq: marker.ackSeq,
+			observedSeq: marker.observedSeq,
+			ts: marker.ts,
+		});
+		await awaitGate2(stream.readiness, 30_000, stream);
+		console.log(`[reference:snapshot] ${vectorId}: gate 2 (SSE checkpoint) satisfied`);
 
-	const stream = await openStream(
-		{ controlUrl, streamingUrl },
-		ROOM_FEED_RESOURCE,
-		{ room },
-		requiredVersion,
-		"quiesced",
-	);
-	stream.readiness.observeGate1({ kind: "source-marker", ackSeq: marker.ackSeq, observedSeq: marker.observedSeq, ts: marker.ts });
-	await awaitGate2(stream.readiness);
-	console.log(`[reference:snapshot] ${vectorId}: gate 2 (SSE checkpoint) satisfied`);
-
-	const nativeReader = makeNativeReader(ctx, room);
-	const nativeSample = await nativeReader.sampleAtOrPast(requiredVersion, () => undefined);
-	console.log(`[reference:snapshot] ${vectorId}: gate 3 (native oracle) admitted`);
-	if (nativeSample.kind !== "admitted") {
-		throw new HarnessError(`run.ts: ${vectorId} base native sample incomparable: ${nativeSample.reason}`);
+		const nativeReader = makeNativeReader(ctx, room);
+		const nativeSample = await nativeReader.sampleAtOrPast(requiredVersion, () => ctx.source.latestCommittedMutationVersion);
+		console.log(`[reference:snapshot] ${vectorId}: gate 3 (native oracle) admitted`);
+		if (nativeSample.kind !== "admitted") {
+			throw new HarnessError(`run.ts: ${vectorId} base native sample incomparable: ${nativeSample.reason}`);
+		}
+		const expected = resolveReferenceFeed(vector.expectedBase, idByLabel);
+		const baseMismatches = compareFeeds(vectorId, expected, nativeSample.value as unknown[]);
+		ctx.recorder.record("1a", requiredVersion, requireCurrent(stream, requiredVersion), [{ name: "mismatch", value: baseMismatches.length }]);
+		if (baseMismatches.length > 0) {
+			throw new HarnessError(`run.ts: ${vectorId} base mismatch: ${JSON.stringify(baseMismatches)}`);
+		}
+		writeTranscript(vectorId, "base", stream.transcript);
+	} finally {
+		await stream.close();
 	}
-	const expected = resolveExpectedFeed(vector.expectedBase, idByLabel);
-	const baseMismatches = compareFeeds(vectorId, expected, nativeSample.value as unknown[]);
-	ctx.recorder.record("1a", requiredVersion, { kind: "current" }, [{ name: "mismatch", value: baseMismatches.length }]);
-	if (baseMismatches.length > 0) {
-		throw new HarnessError(`run.ts: ${vectorId} base mismatch: ${JSON.stringify(baseMismatches)}`);
-	}
-	writeTranscript(vectorId, "base", stream.transcript);
-	stream.close();
 
 	for (const [i, delta] of (vector.deltas ?? []).entries()) {
 		const args = resolveDeltaArgs(delta.args, idByLabel);
-		const { value, ts } = await ctx.source.mutation(`proofVehicle/mutations:${delta.mutation}`, args);
-		if (delta.label !== undefined) {
-			const affected = extractAffectedId(value);
-			if (affected !== undefined) idByLabel.set(delta.label, affected);
-		}
-
-		const deltaStream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, ts, "quiesced");
-		deltaStream.readiness.observeGate1({ kind: "source-version", ts });
-		await awaitGate2(deltaStream.readiness);
-
-		const expectedAfter = vector.expectedAfterDelta?.[i];
-		if (expectedAfter !== null && expectedAfter !== undefined) {
-			const deltaReader = makeNativeReader(ctx, room);
-			const sample = await deltaReader.sampleAtOrPast(ts, () => undefined);
-			if (sample.kind !== "admitted") {
-				throw new HarnessError(`run.ts: ${vectorId} delta ${i} native sample incomparable: ${sample.reason}`);
+		const deltaStream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
+		try {
+			const { value, ts } = await ctx.source.mutation(`proofVehicle/mutations:${delta.mutation}`, args);
+			deltaStream.setRequiredVersion(ts);
+			if (delta.label !== undefined) {
+				const affected = extractAffectedId(value);
+				if (affected !== undefined) idByLabel.set(delta.label, affected);
 			}
-			const expectedRows = resolveExpectedFeed(expectedAfter, idByLabel);
-			const mismatches = compareFeeds(vectorId, expectedRows, sample.value as unknown[]);
-			ctx.recorder.record("1a", ts, { kind: "current" }, [{ name: "mismatch", value: mismatches.length }]);
-			if (mismatches.length > 0) {
-				throw new HarnessError(`run.ts: ${vectorId} delta ${i} mismatch: ${JSON.stringify(mismatches)}`);
+
+			deltaStream.readiness.observeGate1({ kind: "source-version", ts });
+			await awaitGate2(deltaStream.readiness, 30_000, deltaStream);
+
+			const expectedAfter = vector.expectedAfterDelta?.[i];
+			if (expectedAfter !== null && expectedAfter !== undefined) {
+				const deltaReader = makeNativeReader(ctx, room);
+				const sample = await deltaReader.sampleAtOrPast(ts, () => ctx.source.latestCommittedMutationVersion);
+				if (sample.kind !== "admitted") {
+					throw new HarnessError(`run.ts: ${vectorId} delta ${i} native sample incomparable: ${sample.reason}`);
+				}
+				const expectedRows = resolveReferenceFeed(expectedAfter, idByLabel);
+				const mismatches = compareFeeds(vectorId, expectedRows, sample.value as unknown[]);
+				ctx.recorder.record("1a", ts, requireCurrent(deltaStream, ts), [{ name: "mismatch", value: mismatches.length }]);
+				if (mismatches.length > 0) {
+					throw new HarnessError(`run.ts: ${vectorId} delta ${i} mismatch: ${JSON.stringify(mismatches)}`);
+				}
 			}
+			writeTranscript(vectorId, `delta-${i}`, deltaStream.transcript);
+		} finally {
+			await deltaStream.close();
 		}
-		writeTranscript(vectorId, `delta-${i}`, deltaStream.transcript);
-		deltaStream.close();
 	}
 
 	if (vectorId === "V6") {
@@ -377,41 +517,47 @@ async function runV6TornVariants(ctx: RunContext): Promise<void> {
 		const u = resolveLabel(idByLabel, "b");
 
 		const observer = new NoTornObserver(
-			{ resource: GROUP_PROBE_RESOURCE, pre: { active: true, likeCount: 1 }, post: { active: false, likeCount: 2 } },
+			{
+				resource: GROUP_PROBE_RESOURCE,
+				pre: { active: true, likeCount: 1 },
+				post: { active: false, likeCount: 2 },
+			},
 			[GROUP_PROBE_RESOURCE],
 		);
+		let postObserved = false;
 
-		const observedStream = await openStream(
-			{ controlUrl, streamingUrl },
-			GROUP_PROBE_RESOURCE,
-			{},
-			0,
-			"quiesced",
-			(watermark, entries) => {
-				const state = extractWatchedValue(entries, m);
-				observer.observe(watermark, state as Record<string, unknown> | undefined);
-			},
-		);
+		const observedStream = await openStream({ controlUrl, streamingUrl }, GROUP_PROBE_RESOURCE, {}, 0, "quiesced", (watermark, entries) => {
+			const state = extractWatchedValue(entries, m);
+			if (state?.["active"] === false && state["likeCount"] === 2) postObserved = true;
+			observer.observe(watermark, state as Record<string, unknown> | undefined);
+		});
 
-		const first = order[0] === "membership"
-			? await ctx.source.mutation("proofVehicle/mutations:setMembershipActive", { membership: mem, active: false })
-			: await ctx.source.mutation("proofVehicle/mutations:addLike", { message: m, user: u });
-		await new Promise((resolve) => setTimeout(resolve, 200)); // let the first write's SSE event land before the second
-		const second = order[1] === "membership"
-			? await ctx.source.mutation("proofVehicle/mutations:setMembershipActive", { membership: mem, active: false })
-			: await ctx.source.mutation("proofVehicle/mutations:addLike", { message: m, user: u });
-		void first;
-		await new Promise((resolve) => setTimeout(resolve, 500)); // drain remaining SSE events
-
-		observedStream.close();
-		if (!observer.passed) {
-			throw new HarnessError(
-				`run.ts: V6 ${variant} seeded split did not observe the expected torn state on groupProbe: ` +
-					JSON.stringify(observer.tornEvents),
-			);
+		try {
+			await awaitPublicationState(observedStream, "current");
+			const first =
+				order[0] === "membership"
+					? await ctx.source.mutation("proofVehicle/mutations:setMembershipActive", { membership: mem, active: false })
+					: await ctx.source.mutation("proofVehicle/mutations:addLike", {
+							message: m,
+							user: u,
+						});
+			await awaitTornObservation(observer); // prove the first write was published before the second
+			const second =
+				order[1] === "membership"
+					? await ctx.source.mutation("proofVehicle/mutations:setMembershipActive", { membership: mem, active: false })
+					: await ctx.source.mutation("proofVehicle/mutations:addLike", {
+							message: m,
+							user: u,
+						});
+			if (first.ts >= second.ts) throw new HarnessError(`run.ts: V6 ${variant} split writes did not advance the source version`);
+			await awaitObservedPost(() => postObserved);
+			if (observer.passed) {
+				throw new HarnessError(`run.ts: V6 ${variant} seeded split did not observe the expected torn state on groupProbe: ` + JSON.stringify(observer.tornEvents));
+			}
+			console.log(`[reference:snapshot] V6 ${variant}: observed torn state as expected`);
+		} finally {
+			await observedStream.close();
 		}
-		console.log(`[reference:snapshot] V6 ${variant}: observed torn state as expected`);
-		void second;
 	}
 
 	// The canonical atomic path (already exercised in runVector's delta
@@ -454,18 +600,11 @@ async function runConformanceCheck(instance: ServiceInstance): Promise<void> {
 	}
 
 	// service.ts's mirrored routes, named identically to how Express reports them above.
-	const mirroredRoutes = new Set([
-		"POST /v1/streams/:resource",
-		"DELETE /v1/streams/:uuid",
-		"GET /healthz",
-		"GET /v1/streams/:uuid",
-	]);
+	const mirroredRoutes = new Set(["POST /v1/streams/:resource", "DELETE /v1/streams/:uuid", "GET /healthz", "GET /v1/streams/:uuid"]);
 	// Q's mirror intentionally omits the real service's synchronous
 	// snapshot/lookup/inputs routes (this harness never uses them) and adds
 	// no route the real service lacks; the diff allows only that.
-	const realOnly = [...realRoutes].filter(
-		(route) => !mirroredRoutes.has(route) && !route.startsWith("POST /v1/snapshot") && !route.startsWith("PATCH /v1/inputs"),
-	);
+	const realOnly = [...realRoutes].filter((route) => !mirroredRoutes.has(route) && !route.startsWith("POST /v1/snapshot") && !route.startsWith("PATCH /v1/inputs"));
 	const mirroredOnly = [...mirroredRoutes].filter((route) => !realRoutes.has(route));
 	if (realOnly.length > 0 || mirroredOnly.length > 0) {
 		const serverPackage = (await import("../../../skipruntime-ts/server/package.json", { with: { type: "json" } })) as {
@@ -479,7 +618,11 @@ async function runConformanceCheck(instance: ServiceInstance): Promise<void> {
 	console.log("[reference:snapshot] conformance check passed against rest.ts");
 }
 
-async function bootstrap(): Promise<{ ctx: RunContext; service: AnySkipService; instance: ServiceInstance }> {
+async function bootstrap(): Promise<{
+	ctx: RunContext;
+	service: AnySkipService;
+	instance: ServiceInstance;
+}> {
 	await preflightToolchain();
 	const target = resolveTarget();
 
@@ -512,20 +655,54 @@ function flushReport(): void {
 }
 
 /** F4: a live disconnect (closing the SSE stream mid-window) recovers to a match at the next checkpoint. */
-async function runDisconnectFault(room: string): Promise<void> {
+async function runDisconnectFault(ctx: RunContext, room: string): Promise<void> {
 	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
 	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
 	const faultHarness = new FaultHarness();
 	const stream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
-	const injector = disconnectBeforeCheckpointFault(() => {
-		stream.close();
-		return true;
-	});
-	const checkpoint = await faultHarness.run(injector, () => "frozen");
-	const reconnected = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
-	reconnected.close();
-	faultHarness.assertRecovered(injector, checkpoint, true);
-	faultHarness.assertCount(injector, 1);
+	try {
+		const before = await ctx.source.issueMarkerAndAwaitObservation();
+		stream.setRequiredVersion(before.ts);
+		stream.readiness.observeGate1({ kind: "source-marker", ...before });
+		await awaitGate2(stream.readiness, 30_000, stream);
+		await awaitPublicationState(stream, "current");
+		ctx.recorder.record("1a", before.ts, requireCurrent(stream, before.ts), [{ name: "mismatch", value: 0 }]);
+		const injector = disconnectBeforeCheckpointFault(async () => {
+			await stream.close();
+			return stream.publicationState === "frozen";
+		});
+		const checkpoint = await faultHarness.run(injector, () => stream.publicationState, stream.reader.unknownEventCount);
+		ctx.recorder.record(
+			"1a",
+			before.ts,
+			{
+				kind: "stale-with-reason",
+				reason: "F4 SSE stream disconnected before checkpoint",
+			},
+			[{ name: "mismatch", value: 0 }],
+		);
+
+		const reconnected = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
+		try {
+			const after = await ctx.source.issueMarkerAndAwaitObservation();
+			reconnected.setRequiredVersion(after.ts);
+			reconnected.readiness.observeGate1({ kind: "source-marker", ...after });
+			await awaitGate2(reconnected.readiness, 30_000, reconnected);
+			await awaitPublicationState(reconnected, "current");
+			const sample = await makeNativeReader(ctx, room).sampleAtOrPast(after.ts, () => ctx.source.latestCommittedMutationVersion);
+			if (sample.kind !== "admitted") throw new HarnessError(`run.ts: F4 recovery native sample incomparable: ${sample.reason}`);
+			if (reconnected.reader.unknownEventCount > 0) throw new HarnessError("run.ts: F4 recovery contained unknown SSE events");
+			const mismatches = compareFeeds("F4", sample.value as FeedRow[], reconnected.rows);
+			ctx.recorder.record("1a", after.ts, requireCurrent(reconnected, after.ts), [{ name: "mismatch", value: mismatches.length }]);
+			faultHarness.assertRecovered(injector, checkpoint, mismatches.length === 0);
+			faultHarness.assertCount(injector, 1);
+			if (mismatches.length > 0) throw new HarnessError(`run.ts: F4 recovery mismatch: ${JSON.stringify(mismatches)}`);
+		} finally {
+			await reconnected.close();
+		}
+	} finally {
+		await stream.close();
+	}
 	console.log("[reference:snapshot] F4 disconnect-before-checkpoint: recovered");
 }
 
@@ -534,16 +711,14 @@ async function runSnapshotReference(): Promise<void> {
 	try {
 		const corpus = loadCorpus();
 		for (const [vectorId, vector] of Object.entries(corpus.vectors)) {
-			if (vectorId !== "V6") runFixtureReset(ctx.target);
-			// V6's own vector run (including its own base load) happens inside
-			// runVector; the torn-variant helper resets and reloads V6 itself
-			// per variant, so no extra reset is needed before V6's own run.
+			runFixtureReset(ctx.target);
+			// Each vector needs a clean base; V6's later torn variants reset again.
 			await runVector(ctx, vectorId, vector);
 		}
 
 		runFixtureReset(ctx.target);
 		const idByLabel = new Map<string, string>(Object.entries(runLoader("V1", ctx.target)));
-		await runDisconnectFault(resolveLabel(idByLabel, "r"));
+		await runDisconnectFault(ctx, resolveLabel(idByLabel, "r"));
 
 		await runConformanceCheck(instance);
 
