@@ -43,7 +43,10 @@ export const ALL_SELECTED_ROWS_QUERY = "proofVehicle/tables:allSelectedRows";
 export const MARKER_MUTATION = "proofVehicle/fixture:marker";
 const SNAPSHOT_KEY = "allSelectedRows";
 
-export type TaggedRow = { readonly table: string; readonly doc: Record<string, unknown> };
+export type TaggedRow = {
+	readonly table: string;
+	readonly doc: Record<string, unknown>;
+};
 
 type Subscriber = {
 	readonly unsubscribe: () => void;
@@ -54,7 +57,10 @@ type Subscriber = {
 };
 
 /** One completed transition's observed rows and settled timestamp, as `run.ts` needs it. */
-export type ObservedTransition = { readonly ts: number; readonly rows: readonly TaggedRow[] };
+export type ObservedTransition = {
+	readonly ts: number;
+	readonly rows: readonly TaggedRow[];
+};
 
 function extractMarkerSequence(rows: readonly TaggedRow[]): number | undefined {
 	const marker = rows.find((row) => row.table === "marker");
@@ -73,6 +79,7 @@ export class ConvexReferenceSource implements ExternalService {
 	private readonly client: BaseConvexClient;
 	private readonly subscribers = new Map<string, Subscriber>();
 	private latestObserved: ObservedTransition | undefined;
+	private latestMutationCommit: number | undefined;
 	private readonly transitionWaiters = new Set<(observed: ObservedTransition) => void>();
 
 	constructor(
@@ -94,7 +101,10 @@ export class ConvexReferenceSource implements ExternalService {
 		instance: string,
 		resource: string,
 		_params: Json,
-		callbacks: { update: (updates: Entry<Json, Json>[], isInit: boolean) => Promise<void>; error: (error: unknown) => void },
+		callbacks: {
+			update: (updates: Entry<Json, Json>[], isInit: boolean) => Promise<void>;
+			error: (error: unknown) => void;
+		},
 	): Promise<void> {
 		if (resource !== SNAPSHOT_KEY) {
 			throw new HarnessError(`ConvexReferenceSource: unknown resource "${resource}" (expected "${SNAPSHOT_KEY}")`);
@@ -175,7 +185,14 @@ export class ConvexReferenceSource implements ExternalService {
 		if (observedTs === undefined) {
 			throw new HarnessError(`ConvexReferenceSource: no observed timestamp after mutation "${name}"`);
 		}
-		return { value, ts: longToNumber(observedTs) };
+		const ts = longToNumber(observedTs);
+		this.latestMutationCommit = ts;
+		return { value, ts };
+	}
+
+	/** Read after the oracle promise settles, so an intervening harness mutation is visible. */
+	get latestCommittedMutationVersion(): number | undefined {
+		return this.latestMutationCommit;
 	}
 
 	/**
@@ -186,7 +203,11 @@ export class ConvexReferenceSource implements ExternalService {
 	 * separate `ConvexHttpClient` subprocess this session cannot read
 	 * timestamps from directly.
 	 */
-	async issueMarkerAndAwaitObservation(): Promise<{ ackSeq: number; observedSeq: number; ts: number }> {
+	async issueMarkerAndAwaitObservation(): Promise<{
+		ackSeq: number;
+		observedSeq: number;
+		ts: number;
+	}> {
 		const { value } = await this.mutation(MARKER_MUTATION, {});
 		const ackSeq = (value as { marker: number }).marker;
 		const observed = await this.awaitTransitionWhere((candidate) => {
@@ -211,32 +232,49 @@ export class ConvexReferenceSource implements ExternalService {
 	 * a standing subscription the compared query and args could be biased
 	 * by.
 	 */
-	async oneShotQuery(name: string, args: Record<string, Value> = {}): Promise<{ ts: number; value: unknown }> {
+	async oneShotQuery(name: string, args: Record<string, Value> = {}, timeoutMs = 20_000): Promise<{ ts: number; value: unknown }> {
 		const { queryToken, unsubscribe } = this.client.subscribe(name, args);
+		let unregister: (() => void) | undefined;
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			return await new Promise<{ ts: number; value: unknown }>((resolve, reject) => {
+				const finish = (result: { ts: number; value: unknown } | Error): void => {
+					if (timer !== undefined) clearTimeout(timer);
+					unregister?.();
+					if (result instanceof Error) reject(result);
+					else resolve(result);
+				};
 				const immediate = this.client.localQueryResult(name, args);
 				if (immediate !== undefined) {
 					const ts = this.client.getMaxObservedTimestamp();
 					if (ts !== undefined) {
-						resolve({ ts: longToNumber(ts), value: immediate });
+						finish({ ts: longToNumber(ts), value: immediate });
 						return;
 					}
 				}
-				const unregister = this.client.addOnTransitionHandler((transition) => {
+				unregister = this.client.addOnTransitionHandler((transition) => {
 					const match = transition.queries.find((q) => q.token === queryToken);
-					if (match === undefined || match.modification.kind !== "Updated") return;
-					const result = match.modification.result;
-					if (result === undefined) return;
-					unregister();
-					if (!result.success) {
-						reject(new HarnessError(`ConvexReferenceSource: one-shot query "${name}" failed: ${result.errorMessage}`));
+					if (match === undefined) return;
+					if (match.modification.kind === "Removed") {
+						finish(new HarnessError(`ConvexReferenceSource: one-shot query "${name}" was removed`));
 						return;
 					}
-					resolve({ ts: longToNumber(transition.timestamp), value: result.value });
+					const result = match.modification.result;
+					if (result === undefined) return;
+					if (!result.success) {
+						finish(new HarnessError(`ConvexReferenceSource: one-shot query "${name}" failed: ${result.errorMessage}`));
+						return;
+					}
+					finish({
+						ts: longToNumber(transition.timestamp),
+						value: result.value,
+					});
 				});
+				timer = setTimeout(() => finish(new HarnessError(`ConvexReferenceSource: one-shot query "${name}" did not settle within ${timeoutMs}ms`)), timeoutMs);
 			});
 		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+			unregister?.();
 			unsubscribe();
 		}
 	}
@@ -248,10 +286,7 @@ export class ConvexReferenceSource implements ExternalService {
 	 * landing, e.g. because `subscribe` was never called against this
 	 * source), so a stuck wait fails loudly instead of sitting silently.
 	 */
-	async awaitTransitionWhere(
-		predicate: (observed: ObservedTransition) => boolean,
-		timeoutMs = 20_000,
-	): Promise<ObservedTransition> {
+	async awaitTransitionWhere(predicate: (observed: ObservedTransition) => boolean, timeoutMs = 20_000): Promise<ObservedTransition> {
 		if (this.latestObserved !== undefined && predicate(this.latestObserved)) {
 			return this.latestObserved;
 		}
