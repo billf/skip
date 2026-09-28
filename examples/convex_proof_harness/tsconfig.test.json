@@ -2,8 +2,14 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"noEmit": true,
-		"tsBuildInfoFile": "tsconfig.test.tsbuildinfo"
+		"resolveJsonModule": true,
+		"tsBuildInfoFile": "tsconfig.test.tsbuildinfo",
+		// Widened from @skiplabs/tsconfig's "${configDir}/src" so run.ts's
+		// conformance scenario can import skipruntime-ts/server/src/rest.ts
+		// by workspace-relative path (U11's Approach); harmless with
+		// noEmit:true, which never computes emit output paths from this.
+		"rootDir": "${configDir}/../.."
 	},
 	"exclude": [],
-	"include": ["src/**/*.ts"]
+	"include": ["src/**/*.ts", "reference/**/*.ts"]
 }

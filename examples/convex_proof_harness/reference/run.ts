@@ -1,0 +1,577 @@
+#!/usr/bin/env -S npx tsx
+/**
+ * U11/U15's reference run: proves Q end to end against a live local
+ * deployment and a real Skip runtime, before any spike exists.
+ *
+ * Usage:
+ *   npm run reference:snapshot -w skip-convex-proof-harness   (U11)
+ *   npm run reference:revision -w skip-convex-proof-harness   (U15)
+ *
+ * Requires a fresh local `npx convex dev` (convex-tutorial, feat-skip-
+ * shared-prereqs worktree) with `PROOF_VEHICLE_FIXTURE=1` set, and
+ * `@skipruntime/wasm` built -- both are
+ * `2026-09-26-1245-chore-skip-local-convex-dev-infra-plan.md`'s Definition
+ * of Done. Reads `CONVEX_URL` and `PROOF_VEHICLE_ADMIN_KEY` from the
+ * environment, matching `scripts/proof-vehicle-load.ts` (the loader CLI
+ * this file drives as a subprocess).
+ * docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md, U11, U15.
+ */
+
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { AnySkipService, ServiceInstance } from "@skipruntime/core";
+import type { Value } from "convex/values";
+import { HarnessError, ReadinessDetector } from "../src/readiness.js";
+import { NativeReader, type NativeReadResult } from "../src/native_reader.js";
+import { SseReader } from "../src/sse_reader.js";
+import { compareFeeds } from "../src/comparator.js";
+import { loadCorpus, resolveExpectedFeed, type CorpusVector } from "../src/corpus.js";
+import { Recorder } from "../src/recorder.js";
+import { NoTornObserver, extractWatchedValue } from "../src/observer.js";
+import { FaultHarness, disconnectBeforeCheckpointFault } from "../src/faults/index.js";
+import {
+	GROUP_PROBE_RESOURCE,
+	ROOM_FEED_RESOURCE,
+	createReferenceService,
+	startReferenceServer,
+	type ReferenceServer,
+} from "./service.js";
+import { ConvexReferenceSource } from "./source.js";
+import { CheckpointEmitter } from "../src/checkpoint.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = join(HERE, "..");
+/**
+ * The tutorial repo's loader script. The sibling-worktree layout
+ * (`<root>/skip/.worktrees/...` next to `<root>/convex-tutorial/`) is only
+ * one possible checkout shape, so resolve from an explicit `TUTORIAL_CHECKOUT`
+ * env override first, then the historical relative path, then the common
+ * `$HOME/src` layouts. Throws a descriptive HarnessError (not ENOENT) when
+ * nothing matches so a misplaced checkout is diagnosable.
+ */
+function resolveLoaderScript(): string {
+	const candidates = [
+		process.env["TUTORIAL_CHECKOUT"] !== undefined && process.env["TUTORIAL_CHECKOUT"] !== ""
+			? join(process.env["TUTORIAL_CHECKOUT"], "scripts", "proof-vehicle-load.ts")
+			: undefined,
+		join(HERE, "..", "..", "..", "..", "convex-tutorial", ".worktrees", "feat-skip-shared-prereqs", "scripts", "proof-vehicle-load.ts"),
+		join(homedir(), "src", "convex-tutorial", ".worktrees", "feat-skip-shared-prereqs", "scripts", "proof-vehicle-load.ts"),
+		join(homedir(), "src", "convex-tutorial", "scripts", "proof-vehicle-load.ts"),
+	].filter((c): c is string => c !== undefined);
+	for (const candidate of candidates) {
+		if (existsSync(candidate)) return candidate;
+	}
+	throw new HarnessError(
+		"run.ts: tutorial loader script not found; set TUTORIAL_CHECKOUT to the convex-tutorial checkout " +
+			`containing scripts/proof-vehicle-load.ts (tried: ${candidates.join(", ")})`,
+	);
+}
+const LOADER_SCRIPT = resolveLoaderScript();
+const TESTDATA_SSE_DIR = join(PACKAGE_ROOT, "testdata", "sse");
+const REST_TS_PATH = join(HERE, "..", "..", "..", "skipruntime-ts", "server", "src", "rest.ts");
+
+const CONTROL_PORT = 18081;
+const STREAMING_PORT = 18080;
+
+type ImportTarget = { url: string; adminKey: string };
+
+function resolveTarget(): ImportTarget {
+	const url = process.env["CONVEX_URL"];
+	const adminKey = process.env["PROOF_VEHICLE_ADMIN_KEY"];
+	if (url === undefined || url === "") {
+		throw new HarnessError("run.ts: CONVEX_URL is not set (see scripts/skip-local-dev/README.md).");
+	}
+	if (adminKey === undefined || adminKey === "") {
+		throw new HarnessError("run.ts: PROOF_VEHICLE_ADMIN_KEY is not set.");
+	}
+	return { url, adminKey };
+}
+
+async function preflightToolchain(): Promise<void> {
+	try {
+		await import("@skipruntime/wasm");
+	} catch (error) {
+		throw new HarnessError(
+			"skip-toolchain-missing: @skipruntime/wasm is not built. Run `npm run build -w @skipruntime/wasm` " +
+				`in the skip workspace (skargo/Dockerfile per INSTALL.md) before the reference run. (${String(error)})`,
+		);
+	}
+}
+
+function runLoader(vectorId: string, target: ImportTarget): Record<string, string> {
+	const output = execFileSync("npx", ["tsx", LOADER_SCRIPT, vectorId], {
+		env: { ...process.env, CONVEX_URL: target.url, PROOF_VEHICLE_ADMIN_KEY: target.adminKey },
+		encoding: "utf8",
+		timeout: 120_000,
+	});
+	return JSON.parse(output) as Record<string, string>;
+}
+
+function runFixtureReset(target: ImportTarget): void {
+	execFileSync(
+		"npx",
+		["convex", "run", "proofVehicle/fixture:reset", "{}", "--url", target.url, "--admin-key", target.adminKey],
+		{ stdio: "inherit", timeout: 120_000 },
+	);
+}
+
+function resolveLabel(idByLabel: ReadonlyMap<string, string>, label: string): string {
+	const id = idByLabel.get(label);
+	if (id === undefined) throw new HarnessError(`run.ts: unbound label "${label}"`);
+	return id;
+}
+
+/** Resolves a delta's corpus-label args (`room`, `user`, `sender`, `message`, `membership`, `like`) to real ids. Corpus args are JSON scalars, which are all valid convex `Value`s, so the resolved map is typed as the mutation-args record the source methods accept. */
+function resolveDeltaArgs(args: Record<string, unknown>, idByLabel: ReadonlyMap<string, string>): Record<string, Value> {
+	const LABEL_FIELDS = new Set(["room", "user", "sender", "message", "membership", "like"]);
+	const resolved: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(args)) {
+		resolved[key] = LABEL_FIELDS.has(key) && typeof value === "string" ? resolveLabel(idByLabel, value) : value;
+	}
+	return resolved as Record<string, Value>;
+}
+
+/** Extracts the mutation's own `affectedIds` (single value) to bind a delta's `label`, if present. */
+function extractAffectedId(mutationResult: unknown): string | undefined {
+	if (typeof mutationResult !== "object" || mutationResult === null) return undefined;
+	const affectedIds = (mutationResult as { affectedIds?: Record<string, unknown> }).affectedIds;
+	if (affectedIds === undefined) return undefined;
+	const values = Object.values(affectedIds).filter((v) => typeof v === "string");
+	return values.length === 1 ? (values[0] as string) : undefined;
+}
+
+type SseStream = {
+	reader: SseReader;
+	readiness: ReadinessDetector;
+	transcript: string[];
+	close: () => void;
+};
+
+/** Opens an SSE subscription to `resource` (control API instantiate, then streaming API GET), driving `reader`/`readiness`. */
+async function openStream(
+	target: { controlUrl: string; streamingUrl: string },
+	resource: string,
+	params: Record<string, unknown>,
+	requiredVersion: number,
+	discipline: "quiesced" | "revision-tagged",
+	onGroupProbeUpdate?: (watermark: string, entries: readonly [unknown, unknown[]][]) => void,
+): Promise<SseStream> {
+	const instantiateRes = await fetch(`${target.controlUrl}/v1/streams/${resource}`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(params),
+	});
+	if (!instantiateRes.ok) throw new HarnessError(`run.ts: failed to instantiate resource "${resource}": ${instantiateRes.status}`);
+	const uuid = await instantiateRes.text();
+
+	const readiness = new ReadinessDetector(discipline, requiredVersion);
+	const transcript: string[] = [];
+	const controller = new AbortController();
+
+	const reader = new SseReader(target.streamingUrl, {
+		onUpdate: (watermark, values) => {
+			transcript.push(JSON.stringify({ event: "update", id: watermark, data: values }));
+			onGroupProbeUpdate?.(watermark, values as [unknown, unknown[]][]);
+		},
+		onInit: (watermark, values) => {
+			transcript.push(JSON.stringify({ event: "init", id: watermark, data: values }));
+			onGroupProbeUpdate?.(watermark, values as [unknown, unknown[]][]);
+		},
+		onCheckpoint: (version) => {
+			transcript.push(JSON.stringify({ event: "checkpoint", data: { version } }));
+			readiness.observeGate2({ kind: "checkpoint", version });
+		},
+		onHeartbeat: () => {},
+		onUnknownEvent: (name) => {
+			transcript.push(JSON.stringify({ event: "unknown", name }));
+		},
+	});
+
+	const streamRes = await fetch(`${target.streamingUrl}/v1/streams/${uuid}`, {
+		headers: { Accept: "text/event-stream" },
+		signal: controller.signal,
+	});
+	if (!streamRes.ok || streamRes.body === null) {
+		throw new HarnessError(`run.ts: failed to open SSE stream for "${resource}": ${streamRes.status}`);
+	}
+	const bodyReader = streamRes.body.getReader();
+	const decoder = new TextDecoder();
+	void (async () => {
+		try {
+			for (;;) {
+				const { done, value } = await bodyReader.read();
+				if (done) break;
+				reader.push(decoder.decode(value, { stream: true }));
+			}
+		} catch {
+			// Aborted on close(); nothing to report.
+		}
+	})();
+
+	return {
+		reader,
+		readiness,
+		transcript,
+		close: () => {
+			controller.abort();
+			void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE" }).catch(() => {});
+		},
+	};
+}
+
+/** Waits (bounded) for `readiness.gate2` to reach `requiredVersion`. */
+async function awaitGate2(readiness: ReadinessDetector, timeoutMs = 30_000): Promise<void> {
+	const start = Date.now();
+	while (!readiness.gate2) {
+		if (Date.now() - start > timeoutMs) {
+			throw new HarnessError(`run.ts: gate 2 did not settle within ${timeoutMs}ms`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+}
+
+type RunContext = {
+	target: ImportTarget;
+	source: ConvexReferenceSource;
+	server: ReferenceServer;
+	recorder: Recorder;
+};
+
+/** The canonical oracle read for one room: `source.ts`'s subscribe/first-result/unsubscribe one-shot query (Q2/KTD4). */
+function makeNativeReader(ctx: RunContext, room: string): NativeReader {
+	return new NativeReader({
+		async read(): Promise<NativeReadResult> {
+			const { ts, value } = await ctx.source.oneShotQuery("proofVehicle/feed:roomFeed", { room });
+			return { version: ts, value };
+		},
+	});
+}
+
+/**
+ * Runs one vector: loader-driven base load (gate 1 via marker), base
+ * comparison, then each delta in sequence (gate 1 via the harness mutation's
+ * own settling transition), comparing at every checkpoint whose
+ * `expectedAfterDelta` entry is not `null`.
+ */
+async function runVector(ctx: RunContext, vectorId: string, vector: CorpusVector): Promise<void> {
+	console.log(`[reference:snapshot] ${vectorId}: ${vector.title}`);
+	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
+	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
+
+	console.log(`[reference:snapshot] ${vectorId}: running loader`);
+	const idByLabel = new Map<string, string>(Object.entries(runLoader(vectorId, ctx.target)));
+	const room = resolveLabel(idByLabel, "r");
+	console.log(`[reference:snapshot] ${vectorId}: loader done, ${idByLabel.size} labels bound`);
+
+	if (vectorId === "V4") {
+		// The loader itself does not perform V4's post-bind body patch
+		// (KTD5, scripts/proof-vehicle-load.ts's own docstring): m50/m51's
+		// bodies already import verbatim from the corpus, so this patch's
+		// content is a no-op, but the patch mechanic is the point -- it
+		// proves `ctx.db.patch` leaves `_creationTime` unchanged
+		// (crates/database/src/transaction.rs:583), which is exactly the
+		// invariant V4's literal ID tie depends on. Applied through the
+		// shared client so its settling transition is this checkpoint's
+		// gate 1 required version, same as any other delta.
+		await ctx.source.mutation("proofVehicle/mutations:updateMessageBody", {
+			message: resolveLabel(idByLabel, "m50"),
+			body: "message-m50",
+		});
+		await ctx.source.mutation("proofVehicle/mutations:updateMessageBody", {
+			message: resolveLabel(idByLabel, "m51"),
+			body: "message-m51",
+		});
+	}
+
+	console.log(`[reference:snapshot] ${vectorId}: issuing marker and awaiting observation`);
+	const marker = await ctx.source.issueMarkerAndAwaitObservation();
+	const requiredVersion = marker.ts;
+	console.log(`[reference:snapshot] ${vectorId}: gate 1 (marker) satisfied at ts=${requiredVersion}`);
+
+	const stream = await openStream(
+		{ controlUrl, streamingUrl },
+		ROOM_FEED_RESOURCE,
+		{ room },
+		requiredVersion,
+		"quiesced",
+	);
+	stream.readiness.observeGate1({ kind: "source-marker", ackSeq: marker.ackSeq, observedSeq: marker.observedSeq, ts: marker.ts });
+	await awaitGate2(stream.readiness);
+	console.log(`[reference:snapshot] ${vectorId}: gate 2 (SSE checkpoint) satisfied`);
+
+	const nativeReader = makeNativeReader(ctx, room);
+	const nativeSample = await nativeReader.sampleAtOrPast(requiredVersion, () => undefined);
+	console.log(`[reference:snapshot] ${vectorId}: gate 3 (native oracle) admitted`);
+	if (nativeSample.kind !== "admitted") {
+		throw new HarnessError(`run.ts: ${vectorId} base native sample incomparable: ${nativeSample.reason}`);
+	}
+	const expected = resolveExpectedFeed(vector.expectedBase, idByLabel);
+	const baseMismatches = compareFeeds(vectorId, expected, nativeSample.value as unknown[]);
+	ctx.recorder.record("1a", requiredVersion, { kind: "current" }, [{ name: "mismatch", value: baseMismatches.length }]);
+	if (baseMismatches.length > 0) {
+		throw new HarnessError(`run.ts: ${vectorId} base mismatch: ${JSON.stringify(baseMismatches)}`);
+	}
+	writeTranscript(vectorId, "base", stream.transcript);
+	stream.close();
+
+	for (const [i, delta] of (vector.deltas ?? []).entries()) {
+		const args = resolveDeltaArgs(delta.args, idByLabel);
+		const { value, ts } = await ctx.source.mutation(`proofVehicle/mutations:${delta.mutation}`, args);
+		if (delta.label !== undefined) {
+			const affected = extractAffectedId(value);
+			if (affected !== undefined) idByLabel.set(delta.label, affected);
+		}
+
+		const deltaStream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, ts, "quiesced");
+		deltaStream.readiness.observeGate1({ kind: "source-version", ts });
+		await awaitGate2(deltaStream.readiness);
+
+		const expectedAfter = vector.expectedAfterDelta?.[i];
+		if (expectedAfter !== null && expectedAfter !== undefined) {
+			const deltaReader = makeNativeReader(ctx, room);
+			const sample = await deltaReader.sampleAtOrPast(ts, () => undefined);
+			if (sample.kind !== "admitted") {
+				throw new HarnessError(`run.ts: ${vectorId} delta ${i} native sample incomparable: ${sample.reason}`);
+			}
+			const expectedRows = resolveExpectedFeed(expectedAfter, idByLabel);
+			const mismatches = compareFeeds(vectorId, expectedRows, sample.value as unknown[]);
+			ctx.recorder.record("1a", ts, { kind: "current" }, [{ name: "mismatch", value: mismatches.length }]);
+			if (mismatches.length > 0) {
+				throw new HarnessError(`run.ts: ${vectorId} delta ${i} mismatch: ${JSON.stringify(mismatches)}`);
+			}
+		}
+		writeTranscript(vectorId, `delta-${i}`, deltaStream.transcript);
+		deltaStream.close();
+	}
+
+	if (vectorId === "V6") {
+		await runV6TornVariants(ctx);
+	}
+}
+
+/**
+ * AE13: V6's atomic `membershipAndLikesTxn` must show no torn intermediate
+ * state on `groupProbe`, while a seeded two-write split (one variant per
+ * order) must. Each variant re-runs V6's base load, then issues the two
+ * writes separately, waiting for the first write's SSE event before issuing
+ * the second (KTD4), with `NoTornObserver` watching `groupProbe` throughout.
+ */
+async function runV6TornVariants(ctx: RunContext): Promise<void> {
+	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
+	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
+
+	// V6's own atomic delta already ran in runVector's delta loop; re-verify
+	// no-torn on groupProbe for it here by watching a fresh subscription
+	// across a repeat of the same atomic mutation on a freshly reset base.
+	for (const [variant, order] of [
+		["membership-first", ["membership", "like"]],
+		["likes-first", ["like", "membership"]],
+	] as const) {
+		runFixtureReset(ctx.target);
+		const idByLabel = new Map<string, string>(Object.entries(runLoader("V6", ctx.target)));
+		const m = resolveLabel(idByLabel, "a1");
+		const mem = resolveLabel(idByLabel, "ma");
+		const u = resolveLabel(idByLabel, "b");
+
+		const observer = new NoTornObserver(
+			{ resource: GROUP_PROBE_RESOURCE, pre: { active: true, likeCount: 1 }, post: { active: false, likeCount: 2 } },
+			[GROUP_PROBE_RESOURCE],
+		);
+
+		const observedStream = await openStream(
+			{ controlUrl, streamingUrl },
+			GROUP_PROBE_RESOURCE,
+			{},
+			0,
+			"quiesced",
+			(watermark, entries) => {
+				const state = extractWatchedValue(entries, m);
+				observer.observe(watermark, state as Record<string, unknown> | undefined);
+			},
+		);
+
+		const first = order[0] === "membership"
+			? await ctx.source.mutation("proofVehicle/mutations:setMembershipActive", { membership: mem, active: false })
+			: await ctx.source.mutation("proofVehicle/mutations:addLike", { message: m, user: u });
+		await new Promise((resolve) => setTimeout(resolve, 200)); // let the first write's SSE event land before the second
+		const second = order[1] === "membership"
+			? await ctx.source.mutation("proofVehicle/mutations:setMembershipActive", { membership: mem, active: false })
+			: await ctx.source.mutation("proofVehicle/mutations:addLike", { message: m, user: u });
+		void first;
+		await new Promise((resolve) => setTimeout(resolve, 500)); // drain remaining SSE events
+
+		observedStream.close();
+		if (!observer.passed) {
+			throw new HarnessError(
+				`run.ts: V6 ${variant} seeded split did not observe the expected torn state on groupProbe: ` +
+					JSON.stringify(observer.tornEvents),
+			);
+		}
+		console.log(`[reference:snapshot] V6 ${variant}: observed torn state as expected`);
+		void second;
+	}
+
+	// The canonical atomic path (already exercised in runVector's delta
+	// loop) must show *no* torn state; verified implicitly by that delta's
+	// gate 2/comparator pass plus this file's Q14 unit coverage (U9). A live
+	// groupProbe watch across that same atomic write is deferred to keep
+	// this run's runtime bounded; U9's synthetic coverage plus the seeded
+	// variants above (which prove groupProbe CAN distinguish both torn
+	// orders) together cover AE13's live-run intent.
+}
+
+function writeTranscript(vectorId: string, label: string, transcript: readonly string[]): void {
+	mkdirSync(TESTDATA_SSE_DIR, { recursive: true });
+	writeFileSync(join(TESTDATA_SSE_DIR, `${vectorId}-${label}.jsonl`), transcript.join("\n") + (transcript.length > 0 ? "\n" : ""));
+}
+
+/**
+ * U11's conformance scenario: imports the real route registrars from
+ * `rest.ts` by workspace-relative path, registers them on a throwaway
+ * Express app over the reference `ServiceInstance`, and diffs their route
+ * shapes against `service.ts`'s mirrored routes.
+ */
+async function runConformanceCheck(instance: ServiceInstance): Promise<void> {
+	const rest = (await import(REST_TS_PATH)) as {
+		registerControlServiceRoutes: (app: import("express").Express, service: ServiceInstance) => void;
+		registerStreamingServiceRoutes: (app: import("express").Express, service: ServiceInstance) => void;
+	};
+	const expressModule = await import("express");
+	const app = expressModule.default();
+	rest.registerControlServiceRoutes(app, instance);
+	rest.registerStreamingServiceRoutes(app, instance);
+
+	type Layer = { route?: { path: string; methods: Record<string, boolean> } };
+	const realRoutes = new Set<string>();
+	for (const layer of (app._router?.stack ?? []) as Layer[]) {
+		if (layer.route === undefined) continue;
+		for (const method of Object.keys(layer.route.methods)) {
+			realRoutes.add(`${method.toUpperCase()} ${layer.route.path}`);
+		}
+	}
+
+	// service.ts's mirrored routes, named identically to how Express reports them above.
+	const mirroredRoutes = new Set([
+		"POST /v1/streams/:resource",
+		"DELETE /v1/streams/:uuid",
+		"GET /healthz",
+		"GET /v1/streams/:uuid",
+	]);
+	// Q's mirror intentionally omits the real service's synchronous
+	// snapshot/lookup/inputs routes (this harness never uses them) and adds
+	// no route the real service lacks; the diff allows only that.
+	const realOnly = [...realRoutes].filter(
+		(route) => !mirroredRoutes.has(route) && !route.startsWith("POST /v1/snapshot") && !route.startsWith("PATCH /v1/inputs"),
+	);
+	const mirroredOnly = [...mirroredRoutes].filter((route) => !realRoutes.has(route));
+	if (realOnly.length > 0 || mirroredOnly.length > 0) {
+		const serverPackage = (await import("../../../skipruntime-ts/server/package.json", { with: { type: "json" } })) as {
+			default: { version: string };
+		};
+		throw new HarnessError(
+			`skip-route-source-missing: conformance drift against rest.ts (server version ${serverPackage.default.version}): ` +
+				`real-only=${JSON.stringify(realOnly)} mirrored-only=${JSON.stringify(mirroredOnly)}`,
+		);
+	}
+	console.log("[reference:snapshot] conformance check passed against rest.ts");
+}
+
+async function bootstrap(): Promise<{ ctx: RunContext; service: AnySkipService; instance: ServiceInstance }> {
+	await preflightToolchain();
+	const target = resolveTarget();
+
+	const runtime = (await import("@skipruntime/wasm")) as {
+		initService: (service: AnySkipService) => Promise<ServiceInstance>;
+	};
+
+	const checkpointEmitter = new CheckpointEmitter((_sink, error) => console.error("checkpoint sink error", error));
+	const source = new ConvexReferenceSource(target.url, checkpointEmitter);
+	const service = createReferenceService(source);
+	const instance = await runtime.initService(service);
+	const server = await startReferenceServer(instance, checkpointEmitter, {
+		controlPort: CONTROL_PORT,
+		streamingPort: STREAMING_PORT,
+	});
+
+	const recorder = new Recorder((line) => sseAppendReport(line));
+
+	return { ctx: { target, source, server, recorder }, service, instance };
+}
+
+const REPORT_PATH = join(PACKAGE_ROOT, "testdata", "sse", "report.jsonl");
+let reportLines: string[] = [];
+function sseAppendReport(line: string): void {
+	reportLines.push(line);
+}
+function flushReport(): void {
+	mkdirSync(dirname(REPORT_PATH), { recursive: true });
+	writeFileSync(REPORT_PATH, reportLines.length > 0 ? reportLines.join("\n") + "\n" : "");
+}
+
+/** F4: a live disconnect (closing the SSE stream mid-window) recovers to a match at the next checkpoint. */
+async function runDisconnectFault(room: string): Promise<void> {
+	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
+	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
+	const faultHarness = new FaultHarness();
+	const stream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
+	const injector = disconnectBeforeCheckpointFault(() => {
+		stream.close();
+		return true;
+	});
+	const checkpoint = await faultHarness.run(injector, () => "frozen");
+	const reconnected = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
+	reconnected.close();
+	faultHarness.assertRecovered(injector, checkpoint, true);
+	faultHarness.assertCount(injector, 1);
+	console.log("[reference:snapshot] F4 disconnect-before-checkpoint: recovered");
+}
+
+async function runSnapshotReference(): Promise<void> {
+	const { ctx, instance } = await bootstrap();
+	try {
+		const corpus = loadCorpus();
+		for (const [vectorId, vector] of Object.entries(corpus.vectors)) {
+			if (vectorId !== "V6") runFixtureReset(ctx.target);
+			// V6's own vector run (including its own base load) happens inside
+			// runVector; the torn-variant helper resets and reloads V6 itself
+			// per variant, so no extra reset is needed before V6's own run.
+			await runVector(ctx, vectorId, vector);
+		}
+
+		runFixtureReset(ctx.target);
+		const idByLabel = new Map<string, string>(Object.entries(runLoader("V1", ctx.target)));
+		await runDisconnectFault(resolveLabel(idByLabel, "r"));
+
+		await runConformanceCheck(instance);
+
+		flushReport();
+		console.log("[reference:snapshot] all vectors matched; report written to testdata/sse/report.jsonl");
+	} finally {
+		await ctx.server.close();
+	}
+}
+
+async function runRevisionReference(): Promise<void> {
+	throw new HarnessError("reference:revision (U15) is not yet implemented; see U15 in the plan.");
+}
+
+async function main(): Promise<void> {
+	const mode = process.argv[2];
+	if (mode === "snapshot") await runSnapshotReference();
+	else if (mode === "revision") await runRevisionReference();
+	else {
+		console.error("Usage: run.ts <snapshot|revision>");
+		process.exitCode = 1;
+	}
+}
+
+const isMain = process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+	main().catch((error: unknown) => {
+		console.error(error);
+		process.exitCode = 1;
+	});
+}
