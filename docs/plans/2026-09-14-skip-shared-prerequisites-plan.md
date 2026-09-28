@@ -40,8 +40,15 @@ revision-delta tier; `shared-prereqs-u-methodology-spec` (U16,
 Q12's METHODOLOGY.md for Direction 2) gates neither tier. Anchors are in
 `convex-backend/docs/plans/IDENTIFIER-MAP.md`. Building
 `@skipruntime/wasm` (Skiplang toolchain) is a prerequisite for the
-runtime-backed units. Skip-local adapter hardening is tracked in a
-separate backlog outside U1-U16.
+runtime-backed units. Skip-local adapter hardening is tracked in
+`docs/backlog.md` outside U1-U16.
+
+Implementations: this plan tracks 0..N implementations suitable for
+usage. Implementation [0] is the build on convex-backend branch
+`billf/prerequisites/sonnet` (U1-U10, U12-U14, U16 done; U11/U15
+blocked on live deployment). Further implementations (e.g. generated
+with a different model) may be added later; consumers state which
+implementation they validate against.
 
 ## Dependencies
 
@@ -72,7 +79,9 @@ Direction 2 imports no TypeScript; it implements natively against
 `shared-prereqs-q-language-neutral-methodology-spec`.
 
 Delivery order: the snapshot baseline (`shared-prereqs-p-atomic-source-batch-contract`
-(P1) through `shared-prereqs-p-no-runtime-change-required` (P8), P7
+(P1) through `shared-prereqs-p-external-single-fork-atomicity` (P3),
+plus `shared-prereqs-p-poc-vehicle-demo` (P6) and
+`shared-prereqs-p-no-runtime-change-required` (P8), P7
 limited to its snapshot-baseline subset) plus Q's snapshot-path
 baseline first — it releases 1a and 1b — then the revision-delta
 extensions (`shared-prereqs-p-revision-delta-watermark-idempotency`
@@ -81,10 +90,29 @@ extensions (`shared-prereqs-p-revision-delta-watermark-idempotency`
 `shared-prereqs-p-standalone-test-suite` (P7) extension subset, and the
 `shared-prereqs-q-fault-injection-fixture` (Q6) revision-delta faults),
 validated first against 1c's U4/U6. Skip-local adapter hardening is
-tracked in a separate backlog, not release-blocking here.
+tracked in `docs/backlog.md`, not release-blocking here.
 `shared-prereqs-u-methodology-spec` (U16, Q12's METHODOLOGY.md) follows
 U12 on its own schedule and gates neither the snapshot-baseline tier
 (U1-U12) nor the revision-delta tier (U13-U15).
+
+Consumption map (upstream `billf/prerequisites/sonnet`): 1a/1b may
+consume the shipped units now — U1-U2 (contract/encodings), U3-U5
+minus live proof (envelope, fixture/loader code; the same-tick
+scenario and loader verification ride U11), U6-U10 and U12 (settled
+detector, readers, positional comparator, fault assertions, recorder,
+schemas, parity — the Q1-Q5/Q7/Q10/Q13 partial slice consumable
+before any reference run), U13-U14
+(revision-delta code), U16 (METHODOLOGY.md). Still infra-owned: the
+U11 snapshot reference run (end-to-end proof releasing 1a/1b) and the
+U15 revision-delta run (releasing 1c U4/U6 verification), both needing
+the live-deployment infra plan's Definition of Done.
+
+Live-deployment scope: the infra plan's Definition of Done unblocks
+U11 only. U15 additionally requires live Data Sync behavior the DoD
+does not prove: cursor expiry/invalid/ahead, table replacement with
+return to snapshotting, oversized-transaction rejection at the Data
+Sync soft limits, and Skip-process restart mid-CDC. 1c U4/U6
+verification waits on those, not just the infra DoD.
 
 Terminology: upstream commit `676813a47` retired the old A1/A2
 two-table aggregate labels as history. The binding vehicle is the shared
@@ -188,9 +216,13 @@ exactly this reason.)
   comparisons.
 - `shared-prereqs-q-dual-reader-wiring` (Q2) — Skip SSE vs independent native
   reader, loopback-only. Generality: generic. Accept: no shared code path.
-- `shared-prereqs-q-normalized-comparator` (Q3) — canonical
-  `[_creationTime,_id]` ordering, nullable-sender and exact-`likeCount`
-  parity, structured mismatches. Generality: generic comparator,
+- `shared-prereqs-q-normalized-comparator` (Q3) — positional comparison
+  with per-field canonicalization only: nullable-sender and
+  exact-`likeCount` representation parity, structured mismatches. The
+  comparator never re-sorts either side; producing the correct
+  descending `[_creationTime,_id]` order is each side's own
+  responsibility, and a swapped tie surfaces as a positional mismatch.
+  Generality: generic comparator,
   convex-only parity rules. Accept: mismatches locate keys, not bare
   boolean.
 - `shared-prereqs-q-poc-vehicle-driver` (Q4) — five tables, required
@@ -239,7 +271,11 @@ exactly this reason.)
   manifest-pinned vector-set version. Generality: generic. Accept:
   self-test fails before fix, passes after.
 - `shared-prereqs-q-runnable-reference-source` (Q9) — end-to-end before spikes
-  exist. Generality: generic. Accept: runs on PoC vehicle alone.
+  exist. Generality: generic. Prerequisites: a live local Convex
+  deployment and a built Skip runtime, per the Definition of Done of
+  `convex-backend/docs/plans/2026-09-26-1245-chore-skip-local-convex-dev-infra-plan.md`
+  (carries upstream U11). Accept: runs on PoC vehicle alone once those
+  hold.
 - `shared-prereqs-q-report-format` (Q10) — counts/timers/mismatch log consumable
   by spike success criteria. Generality: generic.
 - `shared-prereqs-q-single-metric-schema-authority` (Q11, renamed
@@ -261,6 +297,9 @@ exactly this reason.)
   current; post-header failures freeze watermarks; abandoned reads are
   non-comparisons).
   Generality: generic. Accept: Direction 2 implements natively against it.
+  Adoption check: one Direction-2 implementer trial build or written
+  sign-off that the spec alone sufficed, before the Direction-2 goal
+  counts as served.
 - `shared-prereqs-q-proof-vehicle-fixture` (Q13, added 2026-09-23) — Q
   owns the app-layer `~/src/convex-tutorial` fixture: rooms,
   memberships, and likes tables with the migrated
@@ -271,6 +310,12 @@ exactly this reason.)
   consume it; Q2, Q4, and Q9 depend on it. Additions a consumer needs
   land as Q13 changes with Q13's own tests, reviewed with Q by the plan
   owner, never as consumer-only fixture commits.
+  Cross-repo coupling is versioned upstream (KTD3/U4): function-name
+  list, `allSelectedRows` row-shape version, corpus
+  `fixtureSetVersion`, loader CLI JSON shape. U8 and U11 fail fast on
+  a version mismatch before any comparison, and the vendored corpus
+  copy is checked by semantic hash. 1a/1b/1c runs must cite the
+  contract version they validate against.
   Generality: convex-only (proof-vehicle contract). Accept: every spike
   consumes this fixture rather than building its own.
 - `shared-prereqs-q-no-torn-observer` (Q14, added 2026-09-23) —
@@ -321,6 +366,12 @@ batch primitive.
 - **Q baseline is untiered, so 1c/Direction-2-only work can block the 1a/1b fast path** — Q requirements / Delivery order (P1, product-lens, confidence 75)
 
   Only the fault fixture is explicitly split into baseline-plus-extension, while the metric-schema authority, the language-neutral methodology spec, and other harness items carry no tier. Readers must assume all of the comparator harness gates the release, including work serving only the push service or the Direction-2 cache.
+
+### From 2026-09-28 review
+
+- **Concurrent spike teams contend for single-owner Q13 change control** — Q requirements (proof-vehicle fixture Q13) / Dependencies (P1, adversarial + product-lens, confidence 75)
+
+  Every consumer-needed fixture addition must land as a Q13 change with Q13's own tests reviewed by the plan owner, with no consumer-only commits, while any P/Q gap must be escalated and fixed centrally, never worked around. Three concurrently starting consumers contend for one owner's review bandwidth with no version-branch, revert-ownership, triage-SLA, or time-boxed unblock rule. (Remedies considered: version-gated additions with per-consumer revalidation owners vs triage SLA/deputy plus time-boxed local unblock.)
 
 ## Sources
 
