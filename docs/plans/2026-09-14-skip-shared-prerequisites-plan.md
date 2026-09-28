@@ -40,9 +40,8 @@ revision-delta tier; `shared-prereqs-u-methodology-spec` (U16,
 Q12's METHODOLOGY.md for Direction 2) gates neither tier. Anchors are in
 `convex-backend/docs/plans/IDENTIFIER-MAP.md`. Building
 `@skipruntime/wasm` (Skiplang toolchain) is a prerequisite for the
-runtime-backed units. `skip-teardown-serialization` and
-`skip-structured-logging-latency` remain Skip-local follow-ons outside
-U1-U16.
+runtime-backed units. Skip-local adapter hardening is tracked in a
+separate backlog outside U1-U16.
 
 ## Dependencies
 
@@ -72,11 +71,20 @@ never worked around with a local hand-built or bespoke implementation.
 Direction 2 imports no TypeScript; it implements natively against
 `shared-prereqs-q-language-neutral-methodology-spec`.
 
-Delivery order: the snapshot baseline (P1-P3, P6-P8) plus Q's
-snapshot-path baseline first — it releases 1a and 1b — then the
-revision-delta extensions (P4, P5, P9, Q6 revision-delta faults),
-validated first against 1c's U4/U6. `skip-teardown-serialization` and
-`skip-structured-logging-latency` are follow-ons, not release blockers.
+Delivery order: the snapshot baseline (`shared-prereqs-p-atomic-source-batch-contract`
+(P1) through `shared-prereqs-p-no-runtime-change-required` (P8), P7
+limited to its snapshot-baseline subset) plus Q's snapshot-path
+baseline first — it releases 1a and 1b — then the revision-delta
+extensions (`shared-prereqs-p-revision-delta-watermark-idempotency`
+(P4), `shared-prereqs-p-tombstone-gc-policy` (P5),
+`shared-prereqs-p-generation-fencing-extension` (P9), the
+`shared-prereqs-p-standalone-test-suite` (P7) extension subset, and the
+`shared-prereqs-q-fault-injection-fixture` (Q6) revision-delta faults),
+validated first against 1c's U4/U6. Skip-local adapter hardening is
+tracked in a separate backlog, not release-blocking here.
+`shared-prereqs-u-methodology-spec` (U16, Q12's METHODOLOGY.md) follows
+U12 on its own schedule and gates neither the snapshot-baseline tier
+(U1-U12) nor the revision-delta tier (U13-U15).
 
 Terminology: upstream commit `676813a47` retired the old A1/A2
 two-table aggregate labels as history. The binding vehicle is the shared
@@ -93,10 +101,13 @@ exactly this reason.)
 - `shared-prereqs-p-atomic-source-batch-contract` (P1, snapshot
   baseline) — language-neutral batch mapping: source version/order,
   consistency group, delete/replay form, no-torn publication.
-  Generality: generic. Seam: one envelope
-  `{ts, deleted, component, table, _id, _creationTime, doc}`
-  (`examples/convex_reactive/shared/model.ts:16-18`,
-  `skipruntime-ts/core/src/index.ts:469-533`).
+  Generality: generic. Seam: the envelope
+  `{ts, deleted, component, table, _id, _creationTime, doc}` is a new
+  type owned by `@skip-adapter/atomic-batch` (no shipped precedent:
+  `examples/convex_reactive/shared/model.ts:16-18` defines only the
+  `WorkspaceRow` key/kind union). Closest row-shape precedent is
+  `ConvexSnapshotEntry {key, value}` with `getKey` keying in
+  `skipruntime-ts/adapters/convex/src/index.ts:14-43`).
   Accept: producers/consumers share one type, no per-spike fork; the
   complete group is published once with no subscriber-visible torn
   state. A direction may claim atomicity for a derived feed only after
@@ -106,10 +117,13 @@ exactly this reason.)
   baseline) — non-interchangeable `SnapshotBatch` and
   `RevisionDeltaBatch` encodings; TypeScript helpers are
   external-source-only, Direction 2 implements natively.
-  Generality: generic. Seam: split-mapper, keying
-  `<comp>/<table>/<id>` with uniqueness checks, order-key helper
-  (`examples/convex_reactive/skip/service.ts:34-49` split, `:51-111`
-  rejoin).
+  Generality: generic. Seam: real keying precedent is `diffSnapshot`
+  in `skipruntime-ts/adapters/convex/src/index.ts:133-163` (`getKey`
+  keying, duplicate-key throw, `[key,[]]` tombstones); the
+  `<comp>/<table>/<id>` composite keying plus order-key helper are new
+  code in the atomic-batch package
+  (`examples/convex_reactive/skip/service.ts:34-49` shows only
+  kind-split mappers, `:51-111` group-by aggregation).
   Accept: five-table room-feed vehicle builds on helpers, not
   hand-rolled keys.
 - `shared-prereqs-p-external-single-fork-atomicity` (P3, snapshot
@@ -118,9 +132,13 @@ exactly this reason.)
   complete values, delta paths use tombstones.
   Generality: generic. Seam: `core/src/index.ts:476-501` single-collection
   fork/merge, `Runtime.sk:1038-1065` init-vs-patch.
-  Accept: multi-table unit lands in one tick; no split per-table calls.
-  This establishes the invariant at the source input only; it does not
-  prescribe Direction 2's native publication mechanism.
+  Accept: one `writer.update` per collection per atomic unit (the
+  runtime primitive writes a single collection per call); the
+  multi-table unit counts as atomic only when
+  `shared-prereqs-q-no-torn-observer` observes the full downstream
+  chain with no torn intermediate state. This establishes the
+  invariant at the source input only; it does not prescribe Direction
+  2's native publication mechanism.
 - `shared-prereqs-p-revision-delta-watermark-idempotency` (P4,
   revision-delta extension, required for 1c U4) — apply iff
   `entry.ts > retained_ts`; not Skip's session tick; cursors advance
@@ -143,11 +161,15 @@ exactly this reason.)
   add/remove correctness, through the envelope convention.
   Generality: convex-only (proof-vehicle contract).
   Accept: canonical feed + `likeCount` run on the library.
-- `shared-prereqs-p-standalone-test-suite` (P7, baseline plus
-  extension suites) — split/merge/order/reconciliation tests for the
-  snapshot baseline; watermark/tombstone/generation-fencing tests for
-  the revision-delta extension; no transport or Q dependency.
-  Generality: generic. Accept: suites pass standalone.
+- `shared-prereqs-p-standalone-test-suite` (P7, separately closable
+  per tier) — no transport or Q dependency.
+  Generality: generic.
+  - Baseline subset (releases 1a/1b): split/merge/order/reconciliation
+    tests against synthetic batches. Accept: baseline suite passes
+    standalone.
+  - Extension subset (releases 1c U4): watermark/tombstone/
+    generation-fencing tests. Accept: extension suite passes
+    standalone; 1a/1b never wait for it.
 - `shared-prereqs-p-no-runtime-change-required` (P8, snapshot
   baseline) — no FFI change; batch primitive recorded out-of-scope.
   Generality: generic. Accept: statement + gap note, no runtime diff.
@@ -159,32 +181,23 @@ exactly this reason.)
   Generality: convex-only (DataSync generations).
   Accept: 1c's U4 consumes it as a direct dependency; 1a and 1b never
   carry it.
-- `skip-teardown-serialization` (Skip-local, follow-on, not a 1a/1b release blocker) — serialize setup/teardown
-  against the delivery chain; drop late deliveries, do not error.
-  Generality: generic. Seam: `adapters/postgres/src/index.ts:45-59`
-  `chainInstanceOp`, `adapters/convex/src/index.ts:244-386`.
-  Accept: `unsubscribe` mid-setup tears down once ready; no leak.
-- `skip-structured-logging-latency` (Skip-local, follow-on, not a 1a/1b release blocker) — structured logger +
-  `delivered→applied→published` counters in `@skip-adapter/convex`.
-  Generality: generic. Accept: per-delivery timings in tests.
-
 ## Q requirements
 
-- `shared-prereqs-q-settled-checkpoint-detector` — version-anchored
+- `shared-prereqs-q-settled-checkpoint-detector` (Q1) — version-anchored
   settled predicate. Generality: generic. Accept: checkpoints gate all
   comparisons.
-- `shared-prereqs-q-dual-reader-wiring` — Skip SSE vs independent native
+- `shared-prereqs-q-dual-reader-wiring` (Q2) — Skip SSE vs independent native
   reader, loopback-only. Generality: generic. Accept: no shared code path.
-- `shared-prereqs-q-normalized-comparator` — canonical
+- `shared-prereqs-q-normalized-comparator` (Q3) — canonical
   `[_creationTime,_id]` ordering, nullable-sender and exact-`likeCount`
   parity, structured mismatches. Generality: generic comparator,
   convex-only parity rules. Accept: mismatches locate keys, not bare
   boolean.
-- `shared-prereqs-q-poc-vehicle-driver` — five tables, required
+- `shared-prereqs-q-poc-vehicle-driver` (Q4) — five tables, required
   application indexes, fixed 50-message room feed, exact output
   projection, independent native reader.
   Generality: convex-only. Accept: canonical feed compared.
-- `shared-prereqs-q-counter-timer-catalog` — recorder implementing the
+- `shared-prereqs-q-counter-timer-catalog` (Q5) — recorder implementing the
   shared catalog (1a populates only detector/dual-reader/comparator).
   Metric profile per `research-core-metric-profile.md`:
   rows/bytes, atomic batches, changed keys, dependent/reducer work
@@ -213,19 +226,21 @@ exactly this reason.)
   not-yet-loaded; never partial-as-current; 1b has no terminal-error
   (stale-window instead), D2 error is counted fallback.
   Generality: generic fixture, convex-only fault list.
-  Accept: per-spike subsets run — 1a/1b the baseline, 1c baseline plus
-  extension.
-- `shared-prereqs-q-fault-assertion-helper` — detect/recover/count
+  Accept (separately closable per tier): baseline tier proven on the
+  minimal reference source alone — releases 1a/1b; extension tier
+  proven against 1c's U6 Data Sync triggers — releases 1c U4/U6
+  verification. 1a/1b never wait for the extension tier.
+- `shared-prereqs-q-fault-assertion-helper` (Q7) — detect/recover/count
   helpers. Generality: generic. Accept: helpers reused, not rewritten.
-- `shared-prereqs-q-self-test-seeded-mismatches` — seeded wrong snapshot
+- `shared-prereqs-q-self-test-seeded-mismatches` (Q8) — seeded wrong snapshot
   proves comparator fails loudly, built on shared vectors V1–V6 per
   `research-semantic-test-vectors.md` (dangling sender, membership flip,
   like add/remove, 51-row boundary, deletes, atomic txn) with
   manifest-pinned vector-set version. Generality: generic. Accept:
   self-test fails before fix, passes after.
-- `shared-prereqs-q-runnable-reference-source` — end-to-end before spikes
+- `shared-prereqs-q-runnable-reference-source` (Q9) — end-to-end before spikes
   exist. Generality: generic. Accept: runs on PoC vehicle alone.
-- `shared-prereqs-q-report-format` — counts/timers/mismatch log consumable
+- `shared-prereqs-q-report-format` (Q10) — counts/timers/mismatch log consumable
   by spike success criteria. Generality: generic.
 - `shared-prereqs-q-single-metric-schema-authority` (Q11, renamed
   2026-09-23 from `shared-prereqs-q-schema-matches-1c-jsonl`) —
@@ -237,7 +252,7 @@ exactly this reason.)
   schema; no consumer defines metric names of its own.
   Generality: generic catalog, convex-only profile mapping. Accept: 1c
   consumes without translation.
-- `shared-prereqs-q-language-neutral-methodology-spec` — settled
+- `shared-prereqs-q-language-neutral-methodology-spec` (Q12) — settled
   definition, normalization, counter names, language-neutral, plus the
   four checkpoint gates per `research-logical-checkpoint-contract.md`
   (batch applied, result published, oracle observed, freshness
@@ -278,6 +293,34 @@ exactly this reason.)
 No raw `/api/sync` client, no page topology, no SSE endpoint, no
 backend-native cache. Those live in the spike plans. No new runtime
 batch primitive.
+
+## Deferred / Open Questions
+
+### From 2026-09-24 review
+
+- **Hard direct dependency with no slip rule deadlocks all three spikes** — Dependencies (direct-dependency / never-worked-around rule) (P0, adversarial + product-lens, confidence 100)
+
+  If the shared envelope library or comparator harness slips, is wrong, or the wasm toolchain blocks runtime-backed units, the three spike teams have no legal move: they must wait and may not hand-build. The plan states the release dependency but never the escape condition, turning shared infrastructure into a single point of schedule failure.
+
+- **One envelope invariant spans four incompatible atomicity regimes** — P requirements (batch contract P1 / encodings P2) (P1, adversarial, confidence 75)
+
+  A Transition version (sync-protocol client), a page-region swap publication group (paginated source, explicitly not its transport Transition), an exact-timestamp revision group with cursors (push service), and a commit version with causal watermark (Direction 2) do not share versioning, ordering, deletion, or replay semantics. One contract over them risks passing unit tests that fail on first real-consumer integration.
+
+- **"Structurally one problem" is asserted as scheduling decision, not warranted premise** — Reconciliation (P1, adversarial, confidence 75)
+
+  The shared-build case rests on similar planning-text gaps while the evidence shows divergence: the push service already solved both halves independently, snapshot and revision-delta encodings are non-interchangeable, fault tiers are disjoint by transport, and Direction 2 cannot import code. There is no stated condition under which sharing would be judged to have cost more than hand-building.
+
+- **Q13 fixture ownership plus Q14 observer bloat the 1a/1b release gate** — Q requirements (proof-vehicle fixture Q13 / no-torn observer Q14) (P1, adversarial, confidence 75)
+
+  Releasing the baseline also requires building and owning the full five-table app fixture plus a live every-intermediate-state observer with a mandatory sidecar resource, all under single-owner change control that forbids consumer-only fixture commits. A tutorial migration or loader parity snag blocks the spike teams even though settled-checkpoint comparison alone would unblock them.
+
+- **"Releases 1a/1b" has no entry criteria — fast-unblock goal is untestable** — Dependencies / Delivery order (P1, product-lens, confidence 75)
+
+  The spike teams cannot know when they may actually start, so the central promise that the baseline unblocks them fast cannot be verified or scheduled against. Teams will either ship too much before declaring release or declare release while consumers are still blocked.
+
+- **Q baseline is untiered, so 1c/Direction-2-only work can block the 1a/1b fast path** — Q requirements / Delivery order (P1, product-lens, confidence 75)
+
+  Only the fault fixture is explicitly split into baseline-plus-extension, while the metric-schema authority, the language-neutral methodology spec, and other harness items carry no tier. Readers must assume all of the comparator harness gates the release, including work serving only the push service or the Direction-2 cache.
 
 ## Sources
 
