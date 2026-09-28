@@ -73,7 +73,7 @@ export function computeSemanticHash(corpus: Corpus): string {
  * `computeSemanticHash(loadUncachedCopy())`, and record the new digest here.
  */
 export const EXPECTED_SEMANTIC_HASH =
-	"4d9e54062fa267633277bf84faa78908e33cf5c1f5de4ca24ddda60cf59fb284";
+	"a173a25aa48ae62eb5780d7b85c6f38b4ed3ab3950ac2349b90e48dabc07f4e8";
 
 export class CorpusSemanticHashError extends Error {
 	constructor(actual: string, expected: string) {
