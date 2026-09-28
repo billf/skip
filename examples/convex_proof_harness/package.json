@@ -8,7 +8,9 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.test.tsbuildinfo",
     "lint": "eslint",
     "test": "npm run typecheck && tsx --test \"src/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "reference:snapshot": "tsx reference/run.ts snapshot",
+    "reference:revision": "tsx reference/run.ts revision"
   },
   "author": "SkipLabs",
   "license": "MIT",
@@ -17,9 +19,14 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@skipruntime/core": "0.0.23"
+    "@skip-adapter/atomic-batch": "0.0.23",
+    "@skipruntime/core": "0.0.23",
+    "@skipruntime/wasm": "0.0.23",
+    "convex": "^1.45.0",
+    "express": "^4.22.2"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
     "tsx": "^4.23.13"
   }
 }
