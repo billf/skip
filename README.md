@@ -55,6 +55,8 @@ See our documentation [here](https://skiplabs.io/docs) for introductions to the 
 Some small examples of reactive services are [available](./skipruntime-ts/examples), demonstrating patterns of reactive programming.
 Another [example](./examples/hackernews) is designed to serve as an example of how to deploy and configure a reactive service, using Docker compose to package and orchestrate a backend complete with a reactive service, database, backend web service, and reverse proxy.
 
+The [Convex reactive](./examples/convex_reactive) and [Convex + TanStack](./examples/convex_tanstack) examples explore using Convex as the transactional source of truth for Skip-derived reactive views, with native React and TanStack clients respectively.
+
 ## Skiplang toolchain
 
 The Skip Framework's native runtime is implemented in Skiplang. The compiler, runtime, and surrounding tools (`skargo`, `sktest`, …) live under [`skiplang/`](./skiplang). See [INSTALL.md](./INSTALL.md) for instructions on building the toolchain from source.
