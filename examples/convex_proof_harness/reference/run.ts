@@ -37,6 +37,7 @@ import type { PublicationState } from "../src/faults/state.js";
 import type { FreshnessDisposition } from "../src/recorder.js";
 import { GROUP_PROBE_RESOURCE, ROOM_FEED_RESOURCE, createReferenceService, startReferenceServer, type ReferenceServer } from "./service.js";
 import { ConvexReferenceSource } from "./source.js";
+import { RevisionDeltaReferenceSource, type ScriptedRow } from "./revision.js";
 import { CheckpointEmitter } from "../src/checkpoint.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -738,8 +739,184 @@ async function runSnapshotReference(): Promise<void> {
 	}
 }
 
+type RevisionRunContext = {
+	source: RevisionDeltaReferenceSource;
+	server: ReferenceServer;
+};
+
+async function bootstrapRevision(): Promise<RevisionRunContext> {
+	await preflightToolchain();
+	const runtime = (await import("@skipruntime/wasm")) as {
+		initService: (service: AnySkipService) => Promise<ServiceInstance>;
+	};
+	const checkpointEmitter = new CheckpointEmitter((_sink, error) => console.error("checkpoint sink error", error));
+	const source = new RevisionDeltaReferenceSource(checkpointEmitter);
+	const service = createReferenceService(source);
+	const instance = await runtime.initService(service);
+	const server = await startReferenceServer(instance, checkpointEmitter, {
+		controlPort: CONTROL_PORT,
+		streamingPort: STREAMING_PORT,
+	});
+	return { source, server };
+}
+
+/** V6's base rows (room/users/membership/message/like), re-labeled per scenario to avoid cross-scenario id collisions. */
+function buildRevisionBase(suffix: string): {
+	rows: ScriptedRow[];
+	roomId: string;
+	userAId: string;
+	userBId: string;
+	membershipId: string;
+	messageId: string;
+} {
+	const roomId = `room-${suffix}`;
+	const userAId = `user-a-${suffix}`;
+	const userBId = `user-b-${suffix}`;
+	const membershipId = `membership-${suffix}`;
+	const messageId = `message-${suffix}`;
+	const likeId = `like-${suffix}`;
+	const rows: ScriptedRow[] = [
+		{ table: "rooms", _id: roomId, _creationTime: 1, doc: { _id: roomId, _creationTime: 1, name: "room" } },
+		{ table: "users", _id: userAId, _creationTime: 1, doc: { _id: userAId, _creationTime: 1, name: "Ada" } },
+		{ table: "users", _id: userBId, _creationTime: 1, doc: { _id: userBId, _creationTime: 1, name: "Bea" } },
+		{
+			table: "memberships",
+			_id: membershipId,
+			_creationTime: 1,
+			doc: { _id: membershipId, _creationTime: 1, room: roomId, user: userAId, active: true },
+		},
+		{
+			table: "messages",
+			_id: messageId,
+			_creationTime: 50,
+			doc: { _id: messageId, _creationTime: 50, room: roomId, sender: userAId, body: "atomic" },
+		},
+		{ table: "likes", _id: likeId, _creationTime: 1, doc: { _id: likeId, _creationTime: 1, message: messageId, user: userBId } },
+	];
+	return { rows, roomId, userAId, userBId, membershipId, messageId };
+}
+
+/** V6's delta: deactivate the membership and add a second like, atomically in the plan's Test scenario 1 or split across two groups in scenario 2. */
+function buildRevisionDelta(
+	suffix: string,
+	base: { roomId: string; userAId: string; userBId: string; membershipId: string; messageId: string },
+): { membershipRow: ScriptedRow; likeRow: ScriptedRow } {
+	return {
+		membershipRow: {
+			table: "memberships",
+			_id: base.membershipId,
+			_creationTime: 1,
+			doc: { _id: base.membershipId, _creationTime: 1, room: base.roomId, user: base.userAId, active: false },
+		},
+		likeRow: {
+			table: "likes",
+			_id: `like2-${suffix}`,
+			_creationTime: 2,
+			doc: { _id: `like2-${suffix}`, _creationTime: 2, message: base.messageId, user: base.userBId },
+		},
+	};
+}
+
+function newGroupProbeObserver(): NoTornObserver {
+	return new NoTornObserver(
+		{ resource: GROUP_PROBE_RESOURCE, pre: { active: true, likeCount: 1 }, post: { active: false, likeCount: 2 } },
+		[GROUP_PROBE_RESOURCE],
+	);
+}
+
+/** Test scenario 1: one group (the atomic write) shows no torn state. */
+async function runRevisionOneGroupScenario(ctx: RevisionRunContext, groupTs: () => number): Promise<void> {
+	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
+	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
+	const base = buildRevisionBase("one");
+	await ctx.source.applyGroup({ ts: groupTs(), rows: base.rows });
+
+	const observer = newGroupProbeObserver();
+	const stream = await openStream({ controlUrl, streamingUrl }, GROUP_PROBE_RESOURCE, {}, 0, "quiesced", (watermark, entries) => {
+		observer.observe(watermark, extractWatchedValue(entries, base.messageId) as Record<string, unknown> | undefined);
+	});
+	try {
+		await awaitPublicationState(stream, "current");
+		const delta = buildRevisionDelta("one", base);
+		const ts = groupTs();
+		stream.setRequiredVersion(ts);
+		await ctx.source.applyGroup({ ts, rows: [delta.membershipRow, delta.likeRow] });
+		stream.readiness.observeGate1({ kind: "source-version", ts });
+		await awaitGate2(stream.readiness, 30_000, stream);
+		if (!observer.passed) {
+			throw new HarnessError(`run.ts: revision one-group scenario observed a torn groupProbe state: ${JSON.stringify(observer.tornEvents)}`);
+		}
+		console.log("[reference:revision] one group: no torn state observed, as expected");
+	} finally {
+		await stream.close();
+	}
+}
+
+/** Test scenario 2: a seeded two-group split (one variant per order) must report torn. */
+async function runRevisionSplitScenario(
+	ctx: RevisionRunContext,
+	groupTs: () => number,
+	variant: "membership-first" | "likes-first",
+): Promise<void> {
+	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
+	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
+	const suffix = variant === "membership-first" ? "split-mf" : "split-lf";
+	const base = buildRevisionBase(suffix);
+	await ctx.source.applyGroup({ ts: groupTs(), rows: base.rows });
+	const delta = buildRevisionDelta(suffix, base);
+
+	const observer = newGroupProbeObserver();
+	let postObserved = false;
+	const stream = await openStream({ controlUrl, streamingUrl }, GROUP_PROBE_RESOURCE, {}, 0, "quiesced", (watermark, entries) => {
+		const state = extractWatchedValue(entries, base.messageId) as Record<string, unknown> | undefined;
+		if (state?.["active"] === false && state["likeCount"] === 2) postObserved = true;
+		observer.observe(watermark, state);
+	});
+	try {
+		await awaitPublicationState(stream, "current");
+		const order = variant === "membership-first" ? [delta.membershipRow, delta.likeRow] : [delta.likeRow, delta.membershipRow];
+		await ctx.source.applyGroup({ ts: groupTs(), rows: [order[0]!] });
+		await awaitTornObservation(observer);
+		await ctx.source.applyGroup({ ts: groupTs(), rows: [order[1]!] });
+		await awaitObservedPost(() => postObserved);
+		if (observer.passed) {
+			throw new HarnessError(`run.ts: revision ${variant} seeded split did not observe the expected torn state on groupProbe`);
+		}
+		console.log(`[reference:revision] ${variant}: observed torn state as expected`);
+	} finally {
+		await stream.close();
+	}
+}
+
+/** Test scenario 3: a replayed group is ignored and its counter increments. */
+async function runRevisionReplayScenario(ctx: RevisionRunContext, groupTs: () => number): Promise<void> {
+	const base = buildRevisionBase("replay");
+	const ts = groupTs();
+	await ctx.source.applyGroup({ ts, rows: base.rows });
+	const before = ctx.source.replayedIgnored;
+	const result = await ctx.source.applyGroup({ ts, rows: base.rows });
+	const after = ctx.source.replayedIgnored;
+	if (result.replayedIgnored !== base.rows.length || after - before !== base.rows.length) {
+		throw new HarnessError(
+			`run.ts: revision replay scenario expected all ${base.rows.length} rows ignored as replays, got ${result.replayedIgnored} (counter delta ${after - before})`,
+		);
+	}
+	console.log("[reference:revision] replay: ignored as expected, counter incremented");
+}
+
 async function runRevisionReference(): Promise<void> {
-	throw new HarnessError("reference:revision (U15) is not yet implemented; see U15 in the plan.");
+	const ctx = await bootstrapRevision();
+	try {
+		let ts = 0;
+		const groupTs = () => ++ts;
+		await runRevisionOneGroupScenario(ctx, groupTs);
+		await runRevisionSplitScenario(ctx, groupTs, "membership-first");
+		await runRevisionSplitScenario(ctx, groupTs, "likes-first");
+		await runRevisionReplayScenario(ctx, groupTs);
+		console.log("[reference:revision] all scenarios passed");
+	} finally {
+		await ctx.server.close();
+	}
 }
 
 async function main(): Promise<void> {

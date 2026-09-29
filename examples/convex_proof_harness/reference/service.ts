@@ -57,7 +57,7 @@ const KNOWN_TABLES = deepFreeze(new Set(["rooms", "users", "memberships", "messa
  * `CONTROL_COMPONENT`, which `SplitByTable` reserves for marker rows
  * regardless of the component passed here -- see split.ts).
  */
-const SOURCE_COMPONENT = "proofVehicle";
+export const SOURCE_COMPONENT = "proofVehicle";
 
 export const CONVEX_SOURCE_NAME = "convexSource";
 export const ALL_SELECTED_ROWS_RESOURCE = "allSelectedRows";
