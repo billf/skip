@@ -1,0 +1,31 @@
+{
+  "name": "@skip-adapter/convex",
+  "version": "0.0.23",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.test.tsbuildinfo",
+    "lint": "eslint",
+    "test": "npm run typecheck && tsx --test src/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "author": "SkipLabs",
+  "license": "MIT",
+  "description": "Adapter providing reactive Convex query snapshots to the Skip runtime",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@skipruntime/core": "0.0.23",
+    "convex": "^1.45.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13"
+  }
+}

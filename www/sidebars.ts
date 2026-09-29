@@ -54,6 +54,15 @@ const sidebars: SidebarsConfig = {
       items: [
         {
           type: "category",
+          label: "@skip-adapter/convex",
+          link: {
+            type: "doc",
+            id: "api/adapters/convex/index",
+          },
+          items: require("./docs/api/adapters/convex/typedoc-sidebar.cjs"),
+        },
+        {
+          type: "category",
           label: "@skip-adapter/postgres",
           link: {
             type: "doc",
