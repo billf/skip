@@ -151,6 +151,12 @@ type SseStream = {
 	close: () => Promise<void>;
 };
 
+function transportFailure(error: unknown): string {
+	const cause = error instanceof Error ? error.cause : undefined;
+	const code = cause !== null && typeof cause === "object" && "code" in cause ? String(cause.code) : undefined;
+	return `${String(error)}${cause === undefined ? "" : `; cause: ${String(cause)}${code === undefined ? "" : ` (${code})`}`}`;
+}
+
 /** Opens an SSE subscription to `resource` (control API instantiate, then streaming API GET), driving `reader`/`readiness`. */
 async function openStream(
 	target: { controlUrl: string; streamingUrl: string },
@@ -169,7 +175,7 @@ async function openStream(
 			signal: AbortSignal.timeout(20_000),
 		});
 	} catch (error) {
-		throw new HarnessError(`run.ts: resource "${resource}" instantiation did not complete: ${String(error)}`);
+		throw new HarnessError(`run.ts: resource "${resource}" instantiation did not complete: ${transportFailure(error)}`);
 	}
 	if (!instantiateRes.ok) throw new HarnessError(`run.ts: failed to instantiate resource "${resource}": ${instantiateRes.status}`);
 	const uuid = await instantiateRes.text();
@@ -225,7 +231,7 @@ async function openStream(
 		});
 	} catch (error) {
 		void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE" });
-		throw new HarnessError(`run.ts: SSE headers for "${resource}" did not arrive within 20s: ${String(error)}`);
+		throw new HarnessError(`run.ts: SSE headers for "${resource}" did not arrive within 20s: ${transportFailure(error)}`);
 	} finally {
 		clearTimeout(headerTimer);
 	}
@@ -745,6 +751,20 @@ async function main(): Promise<void> {
 
 const isMain = process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
+	// An error thrown outside any request/await chain we control (e.g. a
+	// raw `setInterval` callback, or a WASM-side callback into JS) is an
+	// uncaught exception/rejection that Node would otherwise print (or, in
+	// some configurations, exit on silently) with no attribution to this
+	// script. Log it loudly and exit deliberately rather than leaving a
+	// "why did the control server just stop responding" mystery.
+	process.on("uncaughtException", (error) => {
+		console.error("[reference:snapshot] uncaughtException", error);
+		process.exit(1);
+	});
+	process.on("unhandledRejection", (reason) => {
+		console.error("[reference:snapshot] unhandledRejection", reason);
+		process.exit(1);
+	});
 	main().catch((error: unknown) => {
 		console.error(error);
 		process.exitCode = 1;

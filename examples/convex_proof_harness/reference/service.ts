@@ -154,6 +154,24 @@ export type ReferenceServer = {
 	close(): Promise<void>;
 };
 
+/**
+ * `Express.listen()`'s callback only fires on success ('listening'); a bind
+ * failure (e.g. `EADDRINUSE` from a leftover process still holding the
+ * port) instead emits an unhandled 'error' event on the returned server,
+ * which crashes the process opaquely with no attribution to which server
+ * failed. Attaching an 'error' listener before `listen()` turns that into a
+ * clear rejection instead.
+ */
+function listenOrThrow(app: Express, port: number, label: string): Promise<Server> {
+	return new Promise<Server>((resolve, reject) => {
+		const server = app.listen(port, "127.0.0.1");
+		server.once("listening", () => resolve(server));
+		server.once("error", (error: unknown) => {
+			reject(new Error(`${label}: failed to bind 127.0.0.1:${port} (${String(error)})`));
+		});
+	});
+}
+
 function assertLoopbackListen(server: Server, label: string): void {
 	const address = server.address();
 	if (address === null || typeof address === "string" || !["127.0.0.1", "::1"].includes(address.address)) {
@@ -213,7 +231,23 @@ export async function startReferenceServer(
 		}
 		try {
 			const uuid = req.params.uuid;
-			const sink = (frame: string) => res.write(frame);
+			// `res.write` after the response has ended (client closed first,
+			// or a DELETE races this connection's own `req.on("close")`
+			// cleanup) throws synchronously. The heartbeat interval and the
+			// checkpoint sink both fire from outside Express's request
+			// pipeline (a raw `setInterval` and the shared
+			// `CheckpointEmitter`'s fan-out), so an uncaught throw there is
+			// an uncaught exception that kills the whole process, not just
+			// this request -- guard every write against `writableEnded`.
+			const safeWrite = (frame: string): void => {
+				if (res.writableEnded) return;
+				try {
+					res.write(frame);
+				} catch (error: unknown) {
+					console.error("streaming write after end", error);
+				}
+			};
+			const sink = safeWrite;
 			const subscriptionID = instance.subscribe(uuid, {
 				subscribed: () => {
 					res.set("Content-Type", "text/event-stream");
@@ -224,17 +258,17 @@ export async function startReferenceServer(
 					checkpointEmitter.addSink(sink);
 				},
 				notify: (update) => {
-					res.write(`event: ${update.isInitial ? "init" : "update"}\n`);
-					res.write(`id: ${update.watermark}\n`);
-					res.write(`data: ${JSON.stringify(update.values)}\n\n`);
+					safeWrite(`event: ${update.isInitial ? "init" : "update"}\n`);
+					safeWrite(`id: ${update.watermark}\n`);
+					safeWrite(`data: ${JSON.stringify(update.values)}\n\n`);
 				},
 				close: () => {
 					checkpointEmitter.removeSink(sink);
-					res.end();
+					if (!res.writableEnded) res.end();
 				},
 			});
 			const heartbeat = setInterval(() => {
-				res.write("event: update\ndata:[]\n\n");
+				safeWrite("event: update\ndata:[]\n\n");
 			}, 30_000);
 			req.on("close", () => {
 				clearInterval(heartbeat);
@@ -252,14 +286,10 @@ export async function startReferenceServer(
 		res.sendStatus(200);
 	});
 
-	const controlServer = await new Promise<Server>((resolve) => {
-		const server = controlApp.listen(options.controlPort, "127.0.0.1", () => resolve(server));
-	});
+	const controlServer = await listenOrThrow(controlApp, options.controlPort, "control server");
 	assertLoopbackListen(controlServer, "control server");
 
-	const streamingServer = await new Promise<Server>((resolve) => {
-		const server = streamingApp.listen(options.streamingPort, "127.0.0.1", () => resolve(server));
-	});
+	const streamingServer = await listenOrThrow(streamingApp, options.streamingPort, "streaming server");
 	assertLoopbackListen(streamingServer, "streaming server");
 
 	return {
