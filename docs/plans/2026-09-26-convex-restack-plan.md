@@ -117,7 +117,7 @@ The four plan suffixes `plan-spikes`, `plan-shared-prereqs`, `plan-dir2-referenc
 | `2378aa72` | `c6e80143` | `plan-shared-prereqs` | Round-four corrections |
 | `0a450650` | `0a3c7f1a` | `plan-shared-prereqs` | Round-five corrections and extracted `docs/backlog.md` |
 
-The document map is path-complete for these commits: the named source commits touch only the listed owner files. Reconstruct final document versions from the pushed tip and compare each branch's owned paths to that tip. A single source SHA may appear in several destination rows because it touched several files; its changes are divided by path and are not duplicated. Put prerequisite research before plans that cite it. Build research and plan branches from the lowest valid local base; place prerequisite research in their ancestry when a plan cites it so links resolve at its tip.
+Before splitting, verify the document map is path-complete: for each pushed SHA from `ffebc354` through `0a450650`, run `git diff-tree --no-commit-id --name-only -r <sha>` and diff the result against the ledger-owned paths; abort and remap on any unlisted, renamed, or deleted path before splitting. Reconstruct final document versions from the pushed tip and compare each branch's owned paths to that tip. A single source SHA may appear in several destination rows because it touched several files; its changes are divided by path and are not duplicated. Put prerequisite research before plans that cite it. Build research and plan branches from the lowest valid local base; place prerequisite research in their ancestry when a plan cites it so links resolve at its tip.
 
 ## U8 — Carry the two local-only commits
 
@@ -126,10 +126,26 @@ The document map is path-complete for these commits: the named source commits to
 | `daf8d746` | `billf/skip/build-capacity-note` | Apple container memory-capacity finding in `CONCEPTS.md` and `docs/solutions/build-errors/` |
 | `ac39e72c` | `billf/convex/restack/adapter-metrics-review` | Convex adapter metrics review archive in `docs/research/convex-adapter-metrics-review.json` |
 
-These commits are present only on local `billf/convex/adapter`; do not publish or reset that branch. The memory-capacity note is independent of the adapter and starts from the committed generated-files branch. The metrics review archive retains its provenance as a separate documentation thesis.
+These commits are present only on local `billf/convex/adapter`; do not publish or reset that branch. The memory-capacity note is independent of the adapter and starts from the committed generated-files branch. The metrics review archive likewise starts from the committed generated-files branch tip and retains its provenance as a separate documentation thesis.
 
 ## U9 — Verify and commit local branches
 
-Compare the rebuilt example content with PR #1, the combined adapter/research/plans result with PR #2, and the two local-only documents with local `billf/convex/adapter`. Account explicitly for expected base differences. The ledger must cover all 29 rows above, all 12 old PR #2 example SHAs as deduplicated equivalents, and the 15 local counterparts to PR #2's unique commits; commit count alone is not proof of content equality. Each fresh branch should normally contain one idiomatic commit stating why that thesis exists; fold later review edits into it. Save a source-SHA-to-destination-path audit locally because a mixed source commit can contribute to several destination branches. Compare the final tree or owned-file bytes to the source tips after replay, and investigate any difference before completion.
+Compare the rebuilt example content with PR #1, the combined adapter/research/plans result with PR #2, and the two local-only documents with local `billf/convex/adapter`. Account explicitly for expected base differences. The ledger must cover all 29 rows above, all 12 old PR #2 example SHAs as deduplicated equivalents, and the 15 local counterparts to PR #2's unique commits; commit count alone is not proof of content equality. Each fresh branch should normally contain one idiomatic commit stating why that thesis exists; fold later review edits into it. Save a source-SHA-to-destination-path audit to a durable location outside the scratch clone (e.g. `<worktree>/.restack-audit/convex-restack-2026-09-26.json`) and commit it on a local audit branch `billf/convex/restack-audit` so it survives `/tmp` cleanup or worktree switches, because a mixed source commit can contribute to several destination branches. Before declaring complete, read the ledger coverage check (29 rows plus 12 dedup equivalents plus 15 local counterparts) from that committed artifact and compare the final tree or owned-file bytes to the source tips; investigate any difference before completion.
 
-Run per-branch TypeScript typechecks and relevant example/adapter tests for code branches. Check research and plan references against files available at each branch tip. Verify generated attributes with `git check-attr`, inspect ancestry and `git diff --check`, and review source-to-result tree differences. Commit each branch locally and record its name, tip SHA, owned paths, and source-commit mapping in a local audit artifact. Stop there: no push, stack submission, replacement PR creation, source PR closure, or worktree rebase is part of this plan. Keep `feat/skip-shared-prereqs` and its uncommitted `examples/convex_proof_harness/testdata/sse/` files untouched.
+Run per-branch TypeScript typechecks and relevant example/adapter tests for code branches. Check research and plan references against files available at each branch tip. Verify generated attributes with `git check-attr`, inspect ancestry and `git diff --check`, and review source-to-result tree differences. Commit each branch locally and record its name, tip SHA, owned paths, and source-commit mapping in the same durable audit artifact. Stop there: no push, stack submission, replacement PR creation, source PR closure, or worktree rebase is part of this plan. Keep `feat/skip-shared-prereqs` and its uncommitted `examples/convex_proof_harness/testdata/sse/` files untouched.
+
+## Deferred / Open Questions
+
+### From 2026-09-29 review
+
+- **Every-branch attributes base contradicts code-only and lowest-base rules** — U1 — Bottom generated-files commit (P1, coherence, confidence 75)
+
+  Implementers who rebase only code branches leave research, plan, and U8 branches without .gitattributes, so generated diffs reappear and ancestry verification fails. Implementers who build every branch directly from the attributes tip cannot also build stacked research-then-plan chains from prerequisite ancestry. The document forces a choice, guaranteeing rework on one reading.
+
+- **Normally-one-commit thesis rule has no falsifiable thesis test** — U1-U9 Edict + U9 verify (one-thesis rule) (P1, adversarial, confidence 75)
+
+  Without a criterion for what counts as one thesis versus two, branch granularity is a judgment call that later reviewers cannot falsify, so 24 branches may encode disputed boundaries as fact.
+
+- **Material-change preservation assumes objective materiality** — U7 — stack-rewriter principle (P1, adversarial, confidence 75)
+
+  Folders must decide what is material with no definition, examples, or arbiter, so two executors produce different final documents while both claiming compliance.
