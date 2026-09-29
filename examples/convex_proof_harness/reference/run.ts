@@ -17,11 +17,12 @@
  * docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md, U11, U15.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type { AnySkipService, ServiceInstance } from "@skipruntime/core";
 import type { Value } from "convex/values";
 import { HarnessError, ReadinessDetector } from "../src/readiness.js";
@@ -71,6 +72,7 @@ const REST_TS_PATH = join(HERE, "..", "..", "..", "skipruntime-ts", "server", "s
 
 const CONTROL_PORT = 18081;
 const STREAMING_PORT = 18080;
+const execFileAsync = promisify(execFile);
 /** The tutorial loader imports message times at this fixed epoch plus corpus-relative milliseconds. */
 const LOADER_EPOCH_MS = Date.parse("2026-01-01T00:00:00Z");
 
@@ -99,8 +101,8 @@ async function preflightToolchain(): Promise<void> {
 	}
 }
 
-function runLoader(vectorId: string, target: ImportTarget): Record<string, string> {
-	const output = execFileSync("npx", ["tsx", LOADER_SCRIPT, vectorId], {
+async function runLoader(vectorId: string, target: ImportTarget): Promise<Record<string, string>> {
+	const { stdout } = await execFileAsync("npx", ["tsx", LOADER_SCRIPT, vectorId], {
 		env: {
 			...process.env,
 			CONVEX_URL: target.url,
@@ -109,11 +111,11 @@ function runLoader(vectorId: string, target: ImportTarget): Record<string, strin
 		encoding: "utf8",
 		timeout: 120_000,
 	});
-	return JSON.parse(output) as Record<string, string>;
+	return JSON.parse(stdout) as Record<string, string>;
 }
 
-function runFixtureReset(target: ImportTarget): void {
-	execFileSync("npx", ["convex", "run", "proofVehicle/fixture:reset", "{}", "--url", target.url, "--admin-key", target.adminKey], { stdio: "inherit", timeout: 120_000 });
+async function runFixtureReset(target: ImportTarget): Promise<void> {
+	await execFileAsync("npx", ["convex", "run", "proofVehicle/fixture:reset", "{}", "--url", target.url, "--admin-key", target.adminKey], { timeout: 120_000 });
 }
 
 function resolveLabel(idByLabel: ReadonlyMap<string, string>, label: string): string {
@@ -152,7 +154,7 @@ type SseStream = {
 };
 
 function transportFailure(error: unknown): string {
-	const cause = error instanceof Error ? error.cause : undefined;
+	const cause = error instanceof Error && "cause" in error ? error.cause : undefined;
 	const code = cause !== null && typeof cause === "object" && "code" in cause ? String(cause.code) : undefined;
 	return `${String(error)}${cause === undefined ? "" : `; cause: ${String(cause)}${code === undefined ? "" : ` (${code})`}`}`;
 }
@@ -170,7 +172,7 @@ async function openStream(
 	try {
 		instantiateRes = await fetch(`${target.controlUrl}/v1/streams/${resource}`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", Connection: "close" },
 			body: JSON.stringify(params),
 			signal: AbortSignal.timeout(20_000),
 		});
@@ -230,13 +232,13 @@ async function openStream(
 			signal: controller.signal,
 		});
 	} catch (error) {
-		void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE" });
+		void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE", headers: { Connection: "close" } }).catch(() => {});
 		throw new HarnessError(`run.ts: SSE headers for "${resource}" did not arrive within 20s: ${transportFailure(error)}`);
 	} finally {
 		clearTimeout(headerTimer);
 	}
 	if (!streamRes.ok || streamRes.body === null) {
-		void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE" });
+		void fetch(`${target.controlUrl}/v1/streams/${uuid}`, { method: "DELETE", headers: { Connection: "close" } }).catch(() => {});
 		throw new HarnessError(`run.ts: failed to open SSE stream for "${resource}": ${streamRes.status}`);
 	}
 	const bodyReader = streamRes.body.getReader();
@@ -287,6 +289,7 @@ async function openStream(
 			closePromise = (async () => {
 				const response = await fetch(`${target.controlUrl}/v1/streams/${uuid}`, {
 					method: "DELETE",
+					headers: { Connection: "close" },
 					signal: AbortSignal.timeout(20_000),
 				});
 				if (!response.ok) throw new HarnessError(`run.ts: failed to delete stream "${resource}": ${response.status}`);
@@ -402,7 +405,7 @@ async function runVector(ctx: RunContext, vectorId: string, vector: CorpusVector
 	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
 
 	console.log(`[reference:snapshot] ${vectorId}: running loader`);
-	const idByLabel = new Map<string, string>(Object.entries(runLoader(vectorId, ctx.target)));
+	const idByLabel = new Map<string, string>(Object.entries(await runLoader(vectorId, ctx.target)));
 	const room = resolveLabel(idByLabel, "r");
 	console.log(`[reference:snapshot] ${vectorId}: loader done, ${idByLabel.size} labels bound`);
 
@@ -516,8 +519,8 @@ async function runV6TornVariants(ctx: RunContext): Promise<void> {
 		["membership-first", ["membership", "like"]],
 		["likes-first", ["like", "membership"]],
 	] as const) {
-		runFixtureReset(ctx.target);
-		const idByLabel = new Map<string, string>(Object.entries(runLoader("V6", ctx.target)));
+		await runFixtureReset(ctx.target);
+		const idByLabel = new Map<string, string>(Object.entries(await runLoader("V6", ctx.target)));
 		const m = resolveLabel(idByLabel, "a1");
 		const mem = resolveLabel(idByLabel, "ma");
 		const u = resolveLabel(idByLabel, "b");
@@ -717,13 +720,13 @@ async function runSnapshotReference(): Promise<void> {
 	try {
 		const corpus = loadCorpus();
 		for (const [vectorId, vector] of Object.entries(corpus.vectors)) {
-			runFixtureReset(ctx.target);
+			await runFixtureReset(ctx.target);
 			// Each vector needs a clean base; V6's later torn variants reset again.
 			await runVector(ctx, vectorId, vector);
 		}
 
-		runFixtureReset(ctx.target);
-		const idByLabel = new Map<string, string>(Object.entries(runLoader("V1", ctx.target)));
+		await runFixtureReset(ctx.target);
+		const idByLabel = new Map<string, string>(Object.entries(await runLoader("V1", ctx.target)));
 		await runDisconnectFault(ctx, resolveLabel(idByLabel, "r"));
 
 		await runConformanceCheck(instance);
