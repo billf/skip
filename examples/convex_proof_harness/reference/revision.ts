@@ -135,7 +135,16 @@ export class RevisionDeltaReferenceSource implements ExternalService {
 			if (result.status === "late-generation-dropped") {
 				throw new HarnessError(`RevisionDeltaReferenceSource: entry for "${row.table}/${row._id}" dropped as a late generation`);
 			}
-			changes.push(result.change as Entry<Json, Json>);
+			// `RevisionDeltaApplier.apply`'s returned `change` value is the
+			// bare doc (`[key, [doc]]`) -- that's the P2 shape 1c's own
+			// data-sync consumer wants, but `SplitByTable` (split.ts) needs
+			// the full envelope (`ts`/`deleted`/`component`/`table`/`_id`/
+			// `_creationTime`/`doc`) as the published value to route by
+			// table via its `isRevisionEnvelope` discrimination. Publish
+			// `entry` itself (structurally a `RevisionEnvelope`), keyed by
+			// the applier's own retention key, not `result.change`'s bare
+			// doc.
+			changes.push([result.change[0], [entry]] as Entry<Json, Json>);
 		}
 		const marked = this.deltaSource.markGroupComplete(this.generationId, ledger, groupId);
 		if (!marked) {
