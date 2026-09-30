@@ -119,3 +119,4 @@ independent of N.
 - `skipruntime-ts/adapters/postgres/src/index.ts:42-59,247-292`
 - `skipruntime-ts/adapters/convex/src/index.ts:244-386`
 - `examples/convex_reactive/skip/service.ts:51-87,151-163`
+- `research-shared-PQ-skip-shape.md` (this directory)

@@ -41,7 +41,7 @@ product / native oracle / paginated acquisition).
   `paginated-reactive-source-atomic-page-split`: keep the old page active
   until both replacements are complete, then exchange in one atomic Skip
   update (merged-domain trick or scoped multi-region update — the latter
-  does not exist). A `SplitRequired` result is
+  does not exist, see atomic-write gap doc). A `SplitRequired` result is
   `paginated-reactive-source-incomplete-split-result` and is never
   published. Without atomic swap a moving row briefly appears twice or
   not at all.
@@ -112,3 +112,4 @@ correct; split a page and assert the atomic-swap invariant.
 - `examples/convex_reactive/skip/service.ts:51-87` (mapper+reducer shape)
 - `skiplang/prelude/src/skstore/EagerDir.sk:1717-1729`
 - `skipruntime-ts/skiplang/core/src/Runtime.sk:1042-1069`
+- `research-skip-atomic-write-gap.md` (this directory)
