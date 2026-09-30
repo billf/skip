@@ -16,6 +16,7 @@ export function useProjectSummaries(): {
     let disposed = false;
     let source: EventSource | undefined;
     let streamId: string | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
 
     const apply = (event: MessageEvent<string>, replace: boolean) => {
       const entries = JSON.parse(event.data) as SkipEntry[];
@@ -44,7 +45,7 @@ export function useProjectSummaries(): {
       }
     };
 
-    void (async () => {
+    const connect = async (): Promise<void> => {
       const response = await fetch(
         "/skip-control/v1/streams/projectSummaries",
         {
@@ -65,19 +66,40 @@ export function useProjectSummaries(): {
       source.addEventListener("init", (event) => receive(event, true));
       source.addEventListener("update", (event) => receive(event, false));
       source.onerror = () => {
-        // Only a CLOSED socket is fatal; transient drops are retried and clear
-        // themselves on the next delivered event.
+        // Only a CLOSED socket is fatal; transient drops are retried by
+        // EventSource itself and clear on the next delivered event.
         if (source?.readyState !== EventSource.CLOSED) return;
-        setError(new Error("Skip event stream disconnected"));
+        // A Skip restart destroys every minted stream id, and EventSource would
+        // otherwise retry this dead one forever while the pane silently stops
+        // updating. Mint a fresh stream instead; its `init` replaces the rows.
+        reconnect();
       };
-    })().catch((reason: unknown) => {
+    };
+
+    const reconnect = () => {
+      if (disposed) return;
+      source?.close();
+      source = undefined;
+      streamId = undefined;
+      setError(new Error("Skip event stream disconnected; reconnecting..."));
+      // Fixed delay is deliberate: an example should be readable, and a real
+      // client wants capped exponential backoff with jitter here.
+      retry = setTimeout(() => {
+        void connect().catch(fail);
+      }, 1000);
+    };
+
+    const fail = (reason: unknown) => {
       if (disposed) return;
       setError(reason instanceof Error ? reason : new Error(String(reason)));
       setLoading(false);
-    });
+    };
+
+    void connect().catch(fail);
 
     return () => {
       disposed = true;
+      if (retry !== undefined) clearTimeout(retry);
       source?.close();
       if (streamId !== undefined) {
         void fetch(`/skip-control/v1/streams/${streamId}`, {
