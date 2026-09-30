@@ -7,6 +7,10 @@ import type {
   SkipService,
   Values,
 } from "@skipruntime/core";
+import {
+  ConvexExternalService,
+  defineConvexReactiveResource,
+} from "@skip-adapter/convex";
 import { api } from "../convex/_generated/api.js";
 import type {
   Project,
@@ -14,7 +18,6 @@ import type {
   Task,
   WorkspaceRow,
 } from "../shared/model.js";
-import { ConvexExternalService } from "./convex_external_service.js";
 
 export type TaskTotals = { totalTasks: number; openTasks: number; openEffort: number };
 export const emptyTotals: TaskTotals = { totalTasks: 0, openTasks: 0, openEffort: 0 };
@@ -87,6 +90,18 @@ class AttachTotals implements Mapper<string, Project, string, ProjectSummary> {
   }
 }
 type Graph = { projectSummaries: EagerCollection<string, ProjectSummary> };
+
+function assertEmptyWorkspaceParams(params: unknown): void {
+  if (
+    params === null ||
+    typeof params !== "object" ||
+    Array.isArray(params) ||
+    Object.keys(params).length !== 0
+  ) {
+    throw new TypeError("workspace does not accept subscription parameters");
+  }
+}
+
 class ProjectSummariesResource implements Resource<Graph> {
   instantiate(graph: Graph): EagerCollection<string, ProjectSummary> {
     return graph.projectSummaries;
@@ -95,12 +110,15 @@ class ProjectSummariesResource implements Resource<Graph> {
 
 export function createService(convexUrl: string): SkipService<{}, {}, Graph> {
   const convex = new ConvexExternalService<WorkspaceRow>(convexUrl, {
-    workspace: {
+    workspace: defineConvexReactiveResource({
       query: api.workspace.snapshot,
-      args: {},
       getKey: (row) => row.key,
-    },
-  });
+      argsFromParams: (params, _scope) => {
+        assertEmptyWorkspaceParams(params);
+        return {};
+      },
+    }),
+  }, { scope: { tenantId: "demo" } });
   return {
     inputs: {},
     resources: { projectSummaries: ProjectSummariesResource },

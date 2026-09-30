@@ -9,15 +9,19 @@
   },
   "scripts": {
     "dev": "convex dev --start 'npm run dev:local'",
+    "predev:local": "npm run build --workspace=@skip-adapter/convex",
     "dev:local": "concurrently --kill-others-on-fail --names skip,web 'npm:skip:dev' 'npm:web:dev'",
     "skip:dev": "tsx watch skip/server.ts",
     "web:dev": "vite dev",
     "build": "npm run typecheck && vite build",
+    "pretypecheck": "npm run build --workspace=@skip-adapter/convex",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test skip/*.test.ts"
+    "pretest": "npm run build --workspace=@skip-adapter/convex",
+    "test": "tsx --test skip/service.test.ts"
   },
   "dependencies": {
     "@convex-dev/react-query": "^0.1.0",
+    "@skip-adapter/convex": "0.0.23",
     "@skipruntime/core": "^0.0.23",
     "@skipruntime/server": "^0.0.23",
     "@skipruntime/wasm": "^0.0.23",
