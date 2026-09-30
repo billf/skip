@@ -32,7 +32,7 @@ and then the write must carry that domain's full snapshot (or use
   `sync-protocol-client-per-table-query-proof-input`.
 - One `context.update()` per call = one reactive tick and one subscriber
   notification set. Two queries = two ticks; subscribers observe the
-   intermediate. The
+   intermediate (see `research-skip-atomic-write-gap.md`). The
   `sync-protocol-client-atomic-transition-apply` choice is therefore:
   single merged input domain (loses per-query init
   granularity, keeps atomicity) vs scoped batch primitive (does not
