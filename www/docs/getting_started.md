@@ -14,6 +14,7 @@ The `@skiplabs/skip` package just depends on the separate component packages:
 
 and optionally:
 - `@skipruntime/native`: The native version of the Skip Runtime
+- `@skip-adapter/convex`: Connector between Convex query snapshots and Skip
 - `@skip-adapter/kafka`: Connector between Kafka and Skip
 - `@skip-adapter/postgres`: Connector between PostgreSQL and Skip
 

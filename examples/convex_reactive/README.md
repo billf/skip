@@ -13,10 +13,15 @@ Requirements: Node.js 20.19+ or 22.12+ (the floor Vite 8 declares) and a Convex
 account (or a configured local Convex deployment).
 
 ```sh
-cd examples/convex_reactive
+cd ../..
 npm install
+npm run build
+cd examples/convex_reactive
 npm run dev
 ```
+
+This example is a root npm workspace. Install dependencies from the repository
+root, then run its commands from this directory.
 
 The first run of `convex dev` asks you to configure a deployment and writes
 `.env.local`. Its `--start` command then launches the Skip service and Vite. Open
@@ -46,7 +51,7 @@ Run `npm test`, `npm run typecheck`, and `npm run build` for local verification.
 
 - `convex/workspace.ts` exposes a single cross-table snapshot and transactional
   mutations.
-- `skip/convex_external_service.ts` adapts `ConvexClient.onUpdate` to Skip's
+- `@skip-adapter/convex` adapts `ConvexClient.onUpdate` to Skip's
   external-resource lifecycle and diffs full snapshots, including deletions.
 - `skip/service.ts` splits the tagged snapshot and incrementally maintains task
   counts and effort by project.
