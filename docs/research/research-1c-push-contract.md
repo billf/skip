@@ -21,7 +21,7 @@ seam choice settled per direction by the Data Sync note).
 - Implement `ExternalService`, not `PolledExternalService`
   (`helpers/src/external.ts:61-121` is the negative example: polling,
   no channels). Reference lifecycle: postgres `chainInstanceOp` +
-  chained setup/teardown; delivery
+  chained setup/teardown (`research-postgres-reference.md`); delivery
   serialization + generation fencing from
   `adapters/convex/src/index.ts:244-363`.
 - Each revision group = one `callbacks.update(updates,false)` call onto
