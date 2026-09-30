@@ -16,6 +16,7 @@ export function useProjectSummaries(): {
     let disposed = false;
     let source: EventSource | undefined;
     let streamId: string | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
 
     const apply = (event: MessageEvent<string>, replace: boolean) => {
       const entries = JSON.parse(event.data) as SkipEntry[];
@@ -52,7 +53,7 @@ export function useProjectSummaries(): {
       }
     };
 
-    void (async () => {
+    const connect = async (): Promise<void> => {
       const response = await fetch(
         "/skip-control/v1/streams/projectSummaries",
         {
@@ -73,19 +74,54 @@ export function useProjectSummaries(): {
       source.addEventListener("init", (event) => receive(event, true));
       source.addEventListener("update", (event) => receive(event, false));
       source.onerror = () => {
-        // Only a CLOSED socket is fatal; transient drops are retried and clear
-        // themselves on the next delivered event.
+        // Only a CLOSED socket is fatal; transient drops are retried by
+        // EventSource itself and clear on the next delivered event.
         if (source?.readyState !== EventSource.CLOSED) return;
-        setError(new Error("Skip event stream disconnected"));
+        // A Skip restart destroys every minted stream id, and EventSource would
+        // otherwise retry this dead one forever while the pane silently stops
+        // updating. Mint a fresh stream instead; its `init` replaces the rows.
+        reconnect();
       };
-    })().catch((reason: unknown) => {
+    };
+
+    const reconnect = () => {
+      if (disposed) return;
+      source?.close();
+      source = undefined;
+      // A closed socket can also mean a 409/406/5xx while Skip is healthy, in
+      // which case the old instance is still alive server-side and only a
+      // DELETE frees it. Best effort: a restarted Skip has already forgotten it.
+      const staleId = streamId;
+      streamId = undefined;
+      if (staleId !== undefined) {
+        void fetch(`/skip-control/v1/streams/${staleId}`, {
+          method: "DELETE",
+        }).catch(() => undefined);
+      }
+      setError(new Error("Skip event stream disconnected; reconnecting..."));
+      // Fixed delay is deliberate: an example should be readable, and a real
+      // client wants capped exponential backoff with jitter here.
+      retry = setTimeout(() => {
+        // A failed re-mint (Skip may still be starting) must schedule another
+        // attempt, or the pane stays frozen on stale rows until a reload.
+        void connect().catch((reason: unknown) => {
+          console.error("Skip stream reconnect failed", reason);
+          reconnect();
+        });
+      }, 1000);
+    };
+
+    const fail = (reason: unknown) => {
       if (disposed) return;
       setError(reason instanceof Error ? reason : new Error(String(reason)));
       setLoading(false);
-    });
+    };
+
+    void connect().catch(fail);
 
     return () => {
       disposed = true;
+      if (retry !== undefined) clearTimeout(retry);
       source?.close();
       if (streamId !== undefined) {
         void fetch(`/skip-control/v1/streams/${streamId}`, {
