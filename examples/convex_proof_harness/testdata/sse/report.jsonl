@@ -1,0 +1,15 @@
+{"event":"checkpoint","direction":"1a","version":1790640817618303000,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640817666700000,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640816661614600,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640816746016800,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640820046509800,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640820089750800,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640820136603600,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640820226037800,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640823589647600,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640831952303000,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640835960997000,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640836003742000,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640847690408000,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640847690408000,"freshness":{"kind":"stale-with-reason","reason":"F4 SSE stream disconnected before checkpoint"},"metrics":[{"name":"mismatch","value":0}]}
+{"event":"checkpoint","direction":"1a","version":1790640847728093000,"freshness":{"kind":"current"},"metrics":[{"name":"mismatch","value":0}]}
