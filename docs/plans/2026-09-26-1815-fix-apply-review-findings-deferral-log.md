@@ -6,6 +6,21 @@ entry names the disposition and the reason; anything not listed here was
 fixed in its unit's `fixup!` commit (or the shared cleanup commit) and
 proven by that unit's gate.
 
+## Fixed after the collective review (commit `10e7b959`)
+
+- **#12 disjoint-_id** — known-fields-only policy kept; `duplicateIdMismatches`
+  pass plus duplicate-id tests on both sides (`comparator.ts`).
+- **#13 shared-mutable cache** — `loadCorpus` deep-freezes before caching;
+  mutation test proves the throw (`corpus.ts`, `deepFreeze` from core).
+- **#14 + #24 corpus boundary** — `HarnessError` on unreadable file,
+  invalid JSON, and bad top-level shape via the exported `parseCorpus`
+  test seam, with tests (`corpus.ts`).
+- **#18 run.ts coupling** — loader path resolves lazily with memoization;
+  report buffer lives on `RunContext`, flushed explicitly.
+- **#20 BY_NAME duplication** — recorder reuses catalog's `lookupMetric`.
+- **#28 loopback taxonomy** — unparseable URLs throw `HarnessError`;
+  hostname normalized (case, brackets, trailing dot) with spelling tests.
+
 ## Deferred (need future conditions)
 
 - **U3 blocked live-runtime scenario** — the disclosed sixth scenario
