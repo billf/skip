@@ -20,6 +20,21 @@ test("identical feeds match", () => {
 	assert.deepEqual(compareFeeds("V-test", feed, feed), []);
 });
 
+test("a duplicated _id on either side surfaces as a duplicate-id mismatch", () => {
+	const dupExpected = [row(), row()];
+	assert.ok(
+		compareFeeds("V-test", dupExpected, [row()]).some(
+			(m) => m.field === "duplicate-id" && m.key === "m1",
+		),
+	);
+	const dupActual = [row(), row()];
+	assert.ok(
+		compareFeeds("V-test", [row()], dupActual).some(
+			(m) => m.field === "duplicate-id" && m.key === "m1",
+		),
+	);
+});
+
 test("wrong likeCount produces a mismatch naming the key and field", () => {
 	const expected = [row({ likeCount: 2 })];
 	const actual = [row({ likeCount: 1 })];

@@ -6,10 +6,8 @@
  * U7, Q5, Q10, Q11.
  */
 
-import { CATALOG, DIRECTION_TAGGED_METRICS, type Direction } from "./catalog.js";
+import { CATALOG, DIRECTION_TAGGED_METRICS, lookupMetric, type Direction } from "./catalog.js";
 import { HarnessError } from "./readiness.js";
-
-const BY_NAME = new Map(CATALOG.map((entry) => [entry.name, entry]));
 
 /**
  * Expected `representation` tag per direction for direction-tagged slots:
@@ -80,7 +78,7 @@ export class Recorder {
 			if (seen.has(sample.name)) {
 				throw new HarnessError(`duplicate metric "${sample.name}" in one record() call for direction "${direction}"`);
 			}
-			const entry = BY_NAME.get(sample.name);
+			const entry = lookupMetric(sample.name);
 			if (entry === undefined) {
 				throw new HarnessError(`unknown metric name "${sample.name}" (not in Q11's catalog)`);
 			}
