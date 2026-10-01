@@ -67,7 +67,12 @@ function resolveLoaderScript(): string {
 			`containing scripts/proof-vehicle-load.ts (tried: ${candidates.join(", ")})`,
 	);
 }
-const LOADER_SCRIPT = resolveLoaderScript();
+let cachedLoaderScript: string | undefined;
+/** Lazily resolves (then memoizes) the tutorial loader path, so importing this module never touches the filesystem. */
+function loaderScript(): string {
+	if (cachedLoaderScript === undefined) cachedLoaderScript = resolveLoaderScript();
+	return cachedLoaderScript;
+}
 const TESTDATA_SSE_DIR = join(PACKAGE_ROOT, "testdata", "sse");
 const REST_TS_PATH = join(HERE, "..", "..", "..", "skipruntime-ts", "server", "src", "rest.ts");
 
@@ -103,7 +108,7 @@ async function preflightToolchain(): Promise<void> {
 }
 
 async function runLoader(vectorId: string, target: ImportTarget): Promise<Record<string, string>> {
-	const { stdout } = await execFileAsync("npx", ["tsx", LOADER_SCRIPT, vectorId], {
+	const { stdout } = await execFileAsync("npx", ["tsx", loaderScript(), vectorId], {
 		env: {
 			...process.env,
 			CONVEX_URL: target.url,
@@ -346,6 +351,7 @@ type RunContext = {
 	source: ConvexReferenceSource;
 	server: ReferenceServer;
 	recorder: Recorder;
+	reportLines: string[];
 };
 
 /** The canonical oracle read for one room: `source.ts`'s subscribe/first-result/unsubscribe one-shot query (Q2/KTD4). */
@@ -649,17 +655,14 @@ async function bootstrap(): Promise<{
 		streamingPort: STREAMING_PORT,
 	});
 
-	const recorder = new Recorder((line) => sseAppendReport(line));
+	const reportLines: string[] = [];
+	const recorder = new Recorder((line) => void reportLines.push(line));
 
-	return { ctx: { target, source, server, recorder }, service, instance };
+	return { ctx: { target, source, server, recorder, reportLines }, service, instance };
 }
 
 const REPORT_PATH = join(PACKAGE_ROOT, "testdata", "sse", "report.jsonl");
-let reportLines: string[] = [];
-function sseAppendReport(line: string): void {
-	reportLines.push(line);
-}
-function flushReport(): void {
+function flushReport(reportLines: string[]): void {
 	mkdirSync(dirname(REPORT_PATH), { recursive: true });
 	writeFileSync(REPORT_PATH, reportLines.length > 0 ? reportLines.join("\n") + "\n" : "");
 }
@@ -732,7 +735,7 @@ async function runSnapshotReference(): Promise<void> {
 
 		await runConformanceCheck(instance);
 
-		flushReport();
+		flushReport(ctx.reportLines);
 		console.log("[reference:snapshot] all vectors matched; report written to testdata/sse/report.jsonl");
 	} finally {
 		await ctx.server.close();

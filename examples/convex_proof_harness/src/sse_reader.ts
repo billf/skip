@@ -34,9 +34,18 @@ export type SseRawFrame = { readonly event?: string; readonly id?: string; reado
  * and serve only PoC/test-fixture data.
  */
 export function assertLoopbackUrl(url: string): void {
-	const parsed = new URL(url);
-	const loopback =
-		parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1";
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new HarnessError(`refused unparseable stream URL (expected loopback): "${url}"`);
+	}
+	const loopbackHosts = new Set(["127.0.0.1", "localhost", "::1"]);
+	// A single trailing dot is the DNS root marker for the same host
+	// ("localhost." === "localhost"), IPv6 literals keep their brackets
+	// (`[::1]`), and URL preserves case -- normalize all three here.
+	const hostname = parsed.hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
+	const loopback = loopbackHosts.has(hostname);
 	if (!loopback) {
 		throw new HarnessError(`refused non-loopback stream URL: "${url}"`);
 	}
