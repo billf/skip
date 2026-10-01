@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SseParseError, SseReader, assertLoopbackUrl, classifyFrame } from "./sse_reader.js";
+import { HarnessError } from "./readiness.js";
 
 test("events split across chunks and multiple events per chunk parse correctly", () => {
 	const updates: [string, unknown][] = [];
@@ -54,6 +55,14 @@ test("a 0.0.0.0 or remote URL is refused", () => {
 	assert.throws(() => assertLoopbackUrl("https://example.com/v1/streams/abc"));
 	assertLoopbackUrl("http://127.0.0.1:8080/v1/streams/abc");
 	assertLoopbackUrl("http://localhost:8080/v1/streams/abc");
+});
+
+test("loopback guard accepts equivalent spellings and rejects malformed URLs as HarnessError", () => {
+	assertLoopbackUrl("http://LOCALHOST:8080/v1/streams/abc");
+	assertLoopbackUrl("http://localhost.:8080/v1/streams/abc");
+	assertLoopbackUrl("http://[::1]:8080/v1/streams/abc");
+	assert.throws(() => assertLoopbackUrl("not a url"), HarnessError);
+	assert.throws(() => assertLoopbackUrl(""), HarnessError);
 });
 
 test("an unknown init/update variant fails closed while other unknown event names are counted", () => {

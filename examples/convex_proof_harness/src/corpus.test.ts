@@ -4,14 +4,34 @@ import {
 	CorpusSemanticHashError,
 	computeSemanticHash,
 	loadCorpus,
+	parseCorpus,
 	resolveExpectedRow,
 	type Corpus,
 } from "./corpus.js";
+import { HarnessError } from "./readiness.js";
 
 test("loadCorpus verifies the vendored corpus's semantic hash and returns V1-V6", () => {
 	const corpus = loadCorpus();
 	assert.equal(corpus.fixtureSetVersion, "1.0.0");
 	assert.deepEqual(Object.keys(corpus.vectors), ["V1", "V2", "V3", "V4", "V5", "V6"]);
+});
+
+test("the cached corpus is deep-frozen: in-place mutation throws instead of corrupting later readers", () => {
+	const corpus = loadCorpus();
+	assert.ok(Object.isFrozen(corpus));
+	assert.throws(() => {
+		(corpus as unknown as Record<string, unknown>)["fixtureSetVersion"] = "tampered";
+	}, TypeError);
+	assert.equal(loadCorpus().fixtureSetVersion, "1.0.0");
+});
+
+test("parseCorpus rejects non-JSON text with a HarnessError naming the source", () => {
+	assert.throws(() => parseCorpus("not json{", "test-source"), HarnessError);
+});
+
+test("parseCorpus rejects a well-formed non-corpus shape with a HarnessError", () => {
+	assert.throws(() => parseCorpus(JSON.stringify([1, 2, 3]), "test-source"), HarnessError);
+	assert.throws(() => parseCorpus(JSON.stringify({ fixtureSetVersion: 42 }), "test-source"), HarnessError);
 });
 
 test("a reformatted corpus (same content, different whitespace) passes", () => {

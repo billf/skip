@@ -9,6 +9,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deepFreeze } from "@skipruntime/core";
+import { HarnessError } from "./readiness.js";
 
 export type CorpusOutRow = {
 	id: string;
@@ -90,19 +92,48 @@ let cached: Corpus | undefined;
 /**
  * Loads the vendored corpus, throwing `CorpusSemanticHashError` on semantic drift.
  *
- * Shared-reference contract: every call after the first returns the same
- * object reference. Callers must not mutate the result in place (clone
- * before mutating); a mutation would silently corrupt all later readers.
+ * The cached corpus is deep-frozen before storing: every call returns the
+ * same reference, and any in-place mutation attempt throws at the mutator
+ * instead of silently corrupting all later readers.
  */
 export function loadCorpus(): Corpus {
 	if (cached !== undefined) return cached;
-	const corpus = JSON.parse(readFileSync(TESTDATA_PATH, "utf8")) as Corpus;
-	const actual = computeSemanticHash(corpus);
+	let raw: string;
+	try {
+		raw = readFileSync(TESTDATA_PATH, "utf8");
+	} catch (error) {
+		throw new HarnessError(`loadCorpus: cannot read vendored corpus at ${TESTDATA_PATH}: ${String(error)}`);
+	}
+	const corpus = parseCorpus(raw, TESTDATA_PATH);
+	cached = deepFreeze(corpus);
+	return cached;
+}
+
+/** Parses corpus text: JSON validity, top-level shape, then the semantic-hash check. Exported as the unit-test seam; `loadCorpus` adds file I/O plus the frozen cache. */
+export function parseCorpus(raw: string, source: string): Corpus {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		throw new HarnessError(`loadCorpus: vendored corpus at ${source} is not valid JSON: ${String(error)}`);
+	}
+	assertCorpusShape(parsed);
+	const actual = computeSemanticHash(parsed);
 	if (actual !== EXPECTED_SEMANTIC_HASH) {
 		throw new CorpusSemanticHashError(actual, EXPECTED_SEMANTIC_HASH);
 	}
-	cached = corpus;
-	return corpus;
+	return parsed;
+}
+
+/** Rejects a parsed corpus whose top-level shape cannot be a `Corpus`. */
+function assertCorpusShape(parsed: unknown): asserts parsed is Corpus {
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new HarnessError("loadCorpus: vendored corpus top level must be an object");
+	}
+	const record = parsed as Record<string, unknown>;
+	if (typeof record["fixtureSetVersion"] !== "string" || record["vectors"] === null || typeof record["vectors"] !== "object") {
+		throw new HarnessError("loadCorpus: vendored corpus must define fixtureSetVersion (string) and vectors (object)");
+	}
 }
 
 /** The shared proof-vehicle contract's canonical feed row shape. */

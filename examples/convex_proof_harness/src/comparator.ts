@@ -60,6 +60,36 @@ function fieldMismatches(
 }
 
 /**
+ * Emits one structured mismatch per repeated `_id` within either side of
+ * a feed comparison. Expected and actual are judged independently: a
+ * duplicated id on either side is a defect in that side's output, whether
+ * or not the two sides agree with each other.
+ */
+function duplicateIdMismatches(
+	vector: string,
+	expected: readonly FeedRow[],
+	actual: readonly unknown[],
+): Mismatch[] {
+	const mismatches: Mismatch[] = [];
+	const checkSide = (rows: readonly unknown[], side: string): void => {
+		const seen = new Set<string>();
+		for (const row of rows) {
+			if (row === null || typeof row !== "object") continue;
+			const id = (row as Record<string, unknown>)["_id"];
+			if (typeof id !== "string") continue;
+			if (seen.has(id)) {
+				mismatches.push({ vector, key: id, field: "duplicate-id", expected: side, actual: id });
+			} else {
+				seen.add(id);
+			}
+		}
+	};
+	checkSide(expected, "expected");
+	checkSide(actual, "actual");
+	return mismatches;
+}
+
+/**
  * Compares `expected` (the corpus's resolved canonical feed) against
  * `actual` (a reader's result), returning every structured mismatch. An
  * empty array means the feeds match.
@@ -71,6 +101,10 @@ export function compareFeeds(
 ): Mismatch[] {
 	const mismatches: Mismatch[] = [];
 	const max = Math.max(expected.length, actual.length);
+	// Disjoint-_id assertion (known-fields-only policy otherwise stands):
+	// a reader emitting the same row twice must surface as a mismatch,
+	// never be judged positionally only.
+	mismatches.push(...duplicateIdMismatches(vector, expected, actual));
 	for (let i = 0; i < max; i++) {
 		const expectedRow = expected[i];
 		const actualRow = actual[i] as Record<string, unknown> | undefined;
