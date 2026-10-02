@@ -192,10 +192,18 @@ export class RevisionDeltaSource<Doc extends Json> {
 		return this.generations.stagingFor(id)?.beginPage(groupIds);
 	}
 
-	/** Applies one entry. Late (superseded generation) and replayed entries are reported distinctly, never applied twice. */
+	/**
+	 * Applies one entry to a staging generation. Late (superseded generation) and replayed entries are reported
+	 * distinctly, never applied twice. Throws, before touching any watermark, if `id` has already promoted: a
+	 * watermark advanced for a revision that never reached the published snapshot would make its later replay
+	 * look stale and drop it for good.
+	 */
 	applyEntry(id: GenerationId, entry: RevisionDeltaEntry<Doc>): ApplyResult<Doc> {
 		const staging = this.generations.stagingFor(id);
 		if (staging === undefined) return { status: "late-generation-dropped" };
+		if (staging.isPromoted) {
+			throw new Error(`applyEntry: generation ${id} has already promoted; it accepts no further staging writes`);
+		}
 		const applier = this.appliers.get(id);
 		if (applier === undefined) return { status: "late-generation-dropped" };
 		const change = applier.apply(entry);

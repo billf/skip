@@ -177,6 +177,24 @@ test("re-promoting the already-promoted current generation through the source is
 	assert.equal(source.currentSnapshot.size, 1);
 });
 
+test("applyEntry on a promoted generation throws without advancing its watermark", () => {
+	const source = new RevisionDeltaSource<{ body: string }>();
+	const gen = source.beginGeneration();
+	const ledger = source.beginPage(gen, ["g1"])!;
+	source.applyEntry(gen, entry({ ts: "10" }));
+	source.markGroupComplete(gen, ledger, "g1");
+	assert.equal(source.promote(gen), true);
+
+	const newer = entry({ ts: "20", doc: { body: "after promotion" } });
+	assert.throws(() => source.applyEntry(gen, newer), /promoted/);
+	// A rejected entry must leave no trace: retrying it is rejected the same
+	// way, not silently reported as a replay of a revision that was never
+	// published.
+	assert.throws(() => source.applyEntry(gen, newer), /promoted/);
+	assert.equal(source.replayedIgnored(gen), 0);
+	assert.deepEqual(source.currentSnapshot.get("chat\u0000messages\u0000m1"), [{ body: "hi" }]);
+});
+
 test("duplicate markGroupComplete is a no-op returning true; stale marks return false and are counted", () => {
 	const source = new RevisionDeltaSource<{ body: string }>();
 	const gen = source.beginGeneration();
