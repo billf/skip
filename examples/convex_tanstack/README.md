@@ -10,8 +10,8 @@ This standalone sibling uses the same Convex-to-Skip pipeline as
 
 ## Run it
 
-Requirements: Node.js 20 or newer and a Convex account (or a configured local
-Convex deployment).
+Requirements: Node.js 22.12 or newer (the floor TanStack Start declares) and a
+Convex account (or a configured local Convex deployment).
 
 ```sh
 cd examples/convex_tanstack
