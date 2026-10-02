@@ -345,6 +345,10 @@ publish-native: build-all
 publish-server: build-all
 	bin/release_npm.sh @skipruntime/server skipruntime-ts/server/package.json $(OTP)
 
+.PHONY: publish-convex-adapter
+publish-convex-adapter: build-all
+	bin/release_npm.sh @skip-adapter/convex skipruntime-ts/adapters/convex/package.json $(OTP)
+
 .PHONY: publish-postgres-adapter
 publish-postgres-adapter: build-all
 	bin/release_npm.sh @skip-adapter/postgres skipruntime-ts/adapters/postgres/package.json $(OTP)
@@ -372,6 +376,7 @@ publish-all: clean \
 	publish-wasm \
 	publish-native \
 	publish-server \
+	publish-convex-adapter \
 	publish-postgres-adapter \
 	publish-kafka-adapter \
 	publish-metapackage

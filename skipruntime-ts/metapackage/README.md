@@ -14,8 +14,9 @@ package will pull in:
    runtime.
 
 Optionally, you may also want to include `@skipruntime/native` for native
-bindings to the Skip runtime, or some `@skip-adapter/*` for prebuilt reactive
-adapters to some popular third-party data sources and systems.
+bindings to the Skip runtime, or an adapter such as `@skip-adapter/convex`,
+`@skip-adapter/kafka`, or `@skip-adapter/postgres` for a prebuilt reactive
+connection to a third-party data source.
 
 See the [docs](https://skiplabs.io/docs/) for more details on Skip.
 
