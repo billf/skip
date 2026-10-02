@@ -78,4 +78,5 @@ export {
   type PreparedRevisions,
   type Publish,
   type RevisionDeltaEntry,
+  type TableRef,
 } from "./revision_delta.js";
