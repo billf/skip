@@ -35,7 +35,6 @@ protocol carries whole query results -- `QueryUpdated` in
 `convex/browser/sync/protocol` delivers `value: JSONValue`, the entire
 re-evaluated result, with no row-level deltas anywhere -- so any client speaking
 it, in any language, receives snapshots and must diff them to recover deltas.
-
 This was checked against a second implementation rather than inferred from the
 TypeScript declarations alone, because those declarations describe what one
 client decodes and not what the server can emit: in the same file,

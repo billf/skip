@@ -52,3 +52,55 @@ test("diffSnapshot rejects duplicate keys", () => {
     /Duplicate Convex snapshot key/,
   );
 });
+
+// `ConvexReactiveResource.query` is an untyped FunctionReference, so `Row` is
+// asserted rather than verified: a schema using v.int64()/v.bytes() typechecks
+// at the call site and only fails at the boundary. These casts reproduce that.
+const untyped = (row: unknown) => row as { key: string };
+
+test("diffSnapshot rejects Convex values Skip cannot represent", () => {
+  // v.int64() -> bigint. Skip's exportJSON throws an opaque wasm error on this,
+  // so the adapter names it at the boundary instead.
+  assert.throws(
+    () =>
+      diffSnapshot(
+        new Map(),
+        [untyped({ key: "a", n: 1n })],
+        (row) => row.key,
+      ),
+    /bigint \(v\.int64\)/,
+  );
+
+  // v.bytes() -> ArrayBuffer. This one is worse: exportJSON emits {} silently,
+  // so without this guard it would reach the graph as data loss, not an error.
+  assert.throws(
+    () =>
+      diffSnapshot(
+        new Map(),
+        [untyped({ key: "a", blob: new ArrayBuffer(8) })],
+        (row) => row.key,
+      ),
+    /binary \(v\.bytes\)/,
+  );
+
+  // Nested, to prove the walk is not shallow.
+  assert.throws(
+    () =>
+      diffSnapshot(
+        new Map(),
+        [untyped({ key: "a", meta: { sizes: [1, 2n] } })],
+        (row) => row.key,
+      ),
+    /row\.meta\.sizes\[1\]/,
+  );
+});
+
+test("diffSnapshot rejects a non-string key", () => {
+  assert.throws(
+    () =>
+      diffSnapshot(new Map(), [{ key: "a", value: 1 }], (row) =>
+        (row.value as unknown as string),
+      ),
+    /Skip keys must be strings/,
+  );
+});
