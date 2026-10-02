@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { RevisionDeltaApplier, RevisionDeltaSource, compareTs, type RevisionDeltaEntry } from "./revision_delta.js";
+import { RevisionDeltaApplier, RevisionDeltaSource, compareTs, revisionKey, type RevisionDeltaEntry } from "./revision_delta.js";
 
 function entry(over: Partial<RevisionDeltaEntry<{ body: string }>> = {}): RevisionDeltaEntry<{ body: string }> {
 	return {
@@ -233,4 +233,212 @@ test("compareTs and the applier reject malformed timestamps with an Error carryi
 	const applier = new RevisionDeltaApplier<{ body: string }>();
 	assert.throws(() => applier.apply(entry({ ts: "bogus" })), /m1/, "entry failure must carry key/entry context");
 	assert.throws(() => applier.sweepTombstones("bogus"), Error);
+});
+
+// --- G1: CDC applied to the promoted (live) generation ----------------------
+
+type Doc = { body: string };
+const KEY_M1 = "chat\u0000messages\u0000m1";
+
+/** A cold build of `m1` at ts 10, promoted, so the source has a live generation. */
+function liveSource(): { source: RevisionDeltaSource<Doc>; gen: number } {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	const ledger = source.beginPage(gen, ["g10"])!;
+	source.applyEntry(gen, entry({ ts: "10" }));
+	source.markGroupComplete(gen, ledger, "g10");
+	assert.equal(source.promote(gen), true);
+	return { source, gen };
+}
+
+/** A `publish` callback that records every batch it was handed. */
+function recorder(): { batches: unknown[][]; publish: (changes: unknown[]) => Promise<void> } {
+	const batches: unknown[][] = [];
+	return { batches, publish: async (changes) => void batches.push(changes) };
+}
+
+test("live CDC: applyGroup publishes the group once and commits only after publish resolves", async () => {
+	const { source, gen } = liveSource();
+	assert.equal(source.isLive(gen), true);
+	assert.equal(source.liveGeneration, gen);
+	const ledger = source.beginPage(gen, ["g20"]);
+	assert.ok(ledger, "beginPage on the live generation returns a ledger instead of throwing");
+
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	const published: unknown[][] = [];
+	const pending = source.applyGroup(gen, ledger, "g20", [entry({ ts: "20", doc: { body: "edited" } })], async (changes) => {
+		published.push(changes);
+		await gate;
+	});
+	// While Skip has not yet accepted the update, nothing is committed.
+	await Promise.resolve();
+	assert.deepEqual(published, [[[KEY_M1, [{ body: "edited" }]]]]);
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+	assert.equal(ledger.isComplete, false);
+
+	release();
+	const result = await pending;
+	assert.equal(result.status, "applied");
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "edited" }]);
+	assert.equal(ledger.isComplete, true);
+});
+
+test("live CDC: a rejected publish commits nothing, so the same group applies again", async () => {
+	const { source, gen } = liveSource();
+	const groupEntries = [entry({ ts: "20", doc: { body: "edited" } })];
+	const first = source.beginPage(gen, ["g20"])!;
+	await assert.rejects(
+		source.applyGroup(gen, first, "g20", groupEntries, async () => {
+			throw new Error("skip rejected the update");
+		}),
+		/skip rejected/,
+	);
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+	assert.equal(first.isComplete, false);
+
+	const { batches, publish } = recorder();
+	const retry = source.beginPage(gen, ["g20"])!;
+	const result = await source.applyGroup(gen, retry, "g20", groupEntries, publish);
+	assert.equal(result.status, "applied");
+	assert.equal(batches.length, 1, "the retried group is applied, not ignored as a replay");
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "edited" }]);
+});
+
+test("live CDC: a checkpointed group replayed on the live generation is ignored without publishing", async () => {
+	const { source, gen } = liveSource();
+	const { batches, publish } = recorder();
+	const groupEntries = [entry({ ts: "20", doc: { body: "edited" } })];
+	await source.applyGroup(gen, source.beginPage(gen, ["g20"])!, "g20", groupEntries, publish);
+	const replayLedger = source.beginPage(gen, ["g20"])!;
+	const replay = await source.applyGroup(gen, replayLedger, "g20", groupEntries, publish);
+	assert.equal(replay.status, "applied");
+	assert.equal(replay.status === "applied" && replay.replayIgnored, 1);
+	assert.equal(batches.length, 1, "publish is not called for a group with no changes");
+	assert.equal(replayLedger.isComplete, true, "an all-replay group still completes its ledger");
+});
+
+test("live CDC: a tombstone removes the key, a replayed older upsert cannot resurrect it, and sweeping keeps the watermark", async () => {
+	const { source, gen } = liveSource();
+	const { batches, publish } = recorder();
+	await source.applyGroup(gen, source.beginPage(gen, ["g20"])!, "g20", [entry({ ts: "20", deleted: true, doc: null })], publish);
+	assert.deepEqual(batches, [[[KEY_M1, []]]]);
+	assert.equal(source.currentSnapshot.has(KEY_M1), false);
+
+	const replay = await source.applyGroup(gen, source.beginPage(gen, ["g10"])!, "g10", [entry({ ts: "10" })], publish);
+	assert.equal(replay.status === "applied" && replay.replayIgnored, 1);
+	assert.equal(source.currentSnapshot.has(KEY_M1), false);
+
+	assert.equal(source.retainedSize(gen), 1);
+	assert.equal(source.sweepTombstones(gen, "20"), true);
+	assert.equal(source.retainedSize(gen), 0);
+	const afterSweep = await source.applyGroup(gen, source.beginPage(gen, ["g15"])!, "g15", [entry({ ts: "15" })], publish);
+	assert.equal(afterSweep.status === "applied" && afterSweep.replayIgnored, 1, "the swept watermark still blocks old replays");
+	assert.equal(batches.length, 1);
+});
+
+test("live CDC: adjacent timestamps above 2^53 apply in order", async () => {
+	const { source, gen } = liveSource();
+	const { publish } = recorder();
+	const a = "1759300000001000101";
+	const b = "1759300000001000102";
+	assert.equal(Number(a), Number(b));
+	const ledger = source.beginPage(gen, [a, b])!;
+	await source.applyGroup(gen, ledger, a, [entry({ ts: a, doc: { body: "edit 1" } })], publish);
+	await source.applyGroup(gen, ledger, b, [entry({ ts: b, doc: { body: "edit 2" } })], publish);
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "edit 2" }]);
+	assert.equal(ledger.isComplete, true);
+});
+
+test("live CDC: applyGroup and beginPage for a superseded generation are dropped and counted", async () => {
+	const { source, gen } = liveSource();
+	const ledger = source.beginPage(gen, ["g20"])!;
+	source.beginGeneration(); // supersedes the live generation
+	const before = source.lateEventDropCount;
+	const { batches, publish } = recorder();
+	const result = await source.applyGroup(gen, ledger, "g20", [entry({ ts: "20" })], publish);
+	assert.equal(result.status, "late-generation-dropped");
+	assert.equal(source.beginPage(gen, ["g21"]), undefined);
+	assert.equal(source.lateEventDropCount, before + 2);
+	assert.equal(batches.length, 0);
+});
+
+test("a live group with changes but no publish callback throws instead of committing unpublished state", async () => {
+	const { source, gen } = liveSource();
+	await assert.rejects(source.applyGroup(gen, source.beginPage(gen, ["g20"])!, "g20", [entry({ ts: "20" })]), /publish/);
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+});
+
+test("staging applyGroup commits into the candidate, never publishes, and marks the group", async () => {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	const { batches, publish } = recorder();
+	const ledger = source.beginPage(gen, ["g10"])!;
+	const result = await source.applyGroup(gen, ledger, "g10", [entry({ ts: "10" })], publish);
+	assert.equal(result.status, "applied");
+	assert.equal(batches.length, 0, "a staging generation publishes nothing partial");
+	assert.equal(ledger.isComplete, true);
+	assert.equal(source.currentSnapshot.size, 0);
+	assert.deepEqual(source.stateEntries(gen), [[KEY_M1, [{ body: "hi" }]]]);
+});
+
+test("an empty page takes no ledger: a build with no pages promotes with an empty snapshot", () => {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	assert.equal(source.promote(gen), true);
+	assert.equal(source.currentSnapshot.size, 0);
+	assert.equal(source.isLive(gen), true);
+});
+
+test("abandonIncompletePages unblocks promotion; the resent page's staged entries are ignored as replays", async () => {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	const cut = source.beginPage(gen, ["g10", "g11"])!;
+	await source.applyGroup(gen, cut, "g10", [entry({ ts: "10" })]);
+	// The connection drops before g11: this ledger can never complete.
+	assert.throws(() => source.promote(gen), /incomplete/);
+	assert.equal(source.abandonIncompletePages(gen), true);
+
+	const resent = source.beginPage(gen, ["g10", "g11"])!;
+	const again = await source.applyGroup(gen, resent, "g10", [entry({ ts: "10" })]);
+	assert.equal(again.status === "applied" && again.replayIgnored, 1);
+	await source.applyGroup(gen, resent, "g11", [entry({ ts: "11", _id: "m2", doc: { body: "second" } })]);
+	assert.equal(source.promote(gen), true);
+	assert.equal(source.currentSnapshot.size, 2);
+});
+
+test("promoteWith publishes the whole candidate in one call, then promotes; a rejected publish leaves state for a retry", async () => {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	const ledger = source.beginPage(gen, ["g10"])!;
+	await source.applyGroup(gen, ledger, "g10", [entry({ ts: "10" }), entry({ ts: "10", _id: "m2", doc: { body: "b" } })]);
+
+	await assert.rejects(source.promoteWith(gen, async () => {
+		throw new Error("skip rejected init");
+	}), /rejected init/);
+	assert.equal(source.isLive(gen), false);
+	assert.equal(source.currentSnapshot.size, 0);
+
+	const { batches, publish } = recorder();
+	assert.equal(await source.promoteWith(gen, publish), true);
+	assert.equal(batches.length, 1);
+	assert.equal(batches[0]!.length, 2);
+	assert.equal(source.isLive(gen), true);
+	assert.equal(await source.promoteWith(gen, publish), true, "re-promoting is idempotent and does not republish");
+	assert.equal(batches.length, 1);
+});
+
+test("promote leaves tombstoned keys out of the published snapshot", async () => {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	const ledger = source.beginPage(gen, ["g10", "g20"])!;
+	await source.applyGroup(gen, ledger, "g10", [entry({ ts: "10" })]);
+	await source.applyGroup(gen, ledger, "g20", [entry({ ts: "20", deleted: true, doc: null })]);
+	assert.equal(source.promote(gen), true);
+	assert.equal(source.currentSnapshot.has(KEY_M1), false);
+	assert.equal(source.currentSnapshot.size, 0);
+});
+
+test("revisionKey is the input key the source publishes", () => {
+	assert.equal(revisionKey({ component: "chat", table: "messages", _id: "m1" }), KEY_M1);
 });

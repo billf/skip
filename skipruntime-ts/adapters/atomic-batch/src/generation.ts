@@ -81,6 +81,25 @@ export class StagingBuild<K, V> {
 		return this.pages.every((page) => page.isComplete);
 	}
 
+	/**
+	 * Drops every page ledger that can no longer complete because its
+	 * connection ended mid-page, so the build can still promote once the
+	 * resent page arrives. Rows already written stay, and the resent page's
+	 * copies of them are ignored as replays. Returns the number dropped.
+	 */
+	abandonIncompletePages(): number {
+		const before = this.pages.length;
+		const complete = this.pages.filter((page) => page.isComplete);
+		this.pages.length = 0;
+		this.pages.push(...complete);
+		return before - complete.length;
+	}
+
+	/** Every row written so far, including tombstones (empty arrays). */
+	entries(): IterableIterator<[K, readonly V[]]> {
+		return this.rows.entries();
+	}
+
 	get isPromoted(): boolean {
 		return this.promoted;
 	}
@@ -117,13 +136,48 @@ export class StagingBuild<K, V> {
  */
 export class GenerationManager<K, V> {
 	private currentGenerationId = 0;
-	private current: ReadonlyMap<K, V[]> = new Map();
+	private current = new Map<K, V[]>();
 	private staging: StagingBuild<K, V> | undefined;
 	private stagingGenerationId = 0;
+	private liveGenerationId: GenerationId | undefined;
 	private lateEventsDropped = 0;
 
+	/**
+	 * The published snapshot. Live writes (`writeLive`) update it in place so
+	 * each group costs O(changed keys); callers must not cache it expecting a
+	 * frozen view.
+	 */
 	get currentSnapshot(): ReadonlyMap<K, V[]> {
 		return this.current;
+	}
+
+	/** The promoted generation whose snapshot is published, or `undefined` before the first promotion. */
+	get liveGeneration(): GenerationId | undefined {
+		return this.liveGenerationId;
+	}
+
+	/** True when `id` has promoted and is still the single write target. */
+	isLive(id: GenerationId): boolean {
+		return id === this.liveGenerationId && this.isCurrentGeneration(id);
+	}
+
+	/**
+	 * Writes one row straight into the published snapshot of the live
+	 * generation `id` (ongoing CDC after promotion). An empty `values` deletes
+	 * the key; stored arrays are frozen like promoted ones. Returns `false`,
+	 * counting a late drop, when `id` is not the live write target.
+	 */
+	writeLive(id: GenerationId, key: K, values: readonly V[]): boolean {
+		if (!this.isLive(id)) {
+			this.lateEventsDropped += 1;
+			return false;
+		}
+		if (values.length === 0) {
+			this.current.delete(key);
+		} else {
+			this.current.set(key, Object.freeze([...values]) as V[]);
+		}
+		return true;
 	}
 
 	get generation(): GenerationId {
@@ -178,7 +232,9 @@ export class GenerationManager<K, V> {
 		const staging = this.stagingFor(id);
 		if (staging === undefined) return false;
 		if (staging.isPromoted) return true;
-		this.current = staging.promote();
+		// Tombstoned keys (empty arrays) are not part of the published snapshot.
+		this.current = new Map([...staging.promote()].filter(([, values]) => values.length > 0));
+		this.liveGenerationId = id;
 		return true;
 	}
 }

@@ -72,6 +72,10 @@ export {
   RevisionDeltaApplier,
   RevisionDeltaSource,
   compareTs,
+  revisionKey,
+  type ApplyGroupResult,
   type ApplyResult,
+  type PreparedRevisions,
+  type Publish,
   type RevisionDeltaEntry,
 } from "./revision_delta.js";
