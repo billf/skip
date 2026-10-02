@@ -65,6 +65,11 @@ export class StagingBuild<K, V> {
 	private readonly pages: PendingPageLedger[] = [];
 	private promoted = false;
 
+	/** `seed` pre-populates the build, e.g. a replacement candidate cloned from the last-good snapshot. */
+	constructor(seed?: Iterable<readonly [K, readonly V[]]>) {
+		if (seed !== undefined) for (const [key, values] of seed) this.rows.set(key, [...values]);
+	}
+
 	beginPage(groupIds: readonly string[]): PendingPageLedger {
 		if (this.promoted) throw new Error("cannot begin a page on a build that has already promoted");
 		const ledger = new PendingPageLedger(groupIds);
@@ -93,6 +98,12 @@ export class StagingBuild<K, V> {
 		this.pages.length = 0;
 		this.pages.push(...complete);
 		return before - complete.length;
+	}
+
+	/** Removes every row whose key matches `pred` (a table truncated mid-build). */
+	deleteWhere(pred: (key: K) => boolean): void {
+		if (this.promoted) throw new Error("cannot delete from a staging build after it has promoted");
+		for (const key of [...this.rows.keys()]) if (pred(key)) this.rows.delete(key);
 	}
 
 	/** Every row written so far, including tombstones (empty arrays). */
@@ -203,6 +214,28 @@ export class GenerationManager<K, V> {
 		this.stagingGenerationId = this.currentGenerationId;
 		this.staging = new StagingBuild<K, V>();
 		return this.stagingGenerationId;
+	}
+
+	/**
+	 * Begins a replacement candidate seeded from the live snapshot's rows that
+	 * `retain` keeps (every table but the truncated ones). The candidate becomes
+	 * the single write target, so the live generation is fenced while it builds,
+	 * but its snapshot stays published until the candidate promotes. Any earlier
+	 * candidate is discarded. Throws if nothing is live yet.
+	 */
+	beginReplacement(retain: (key: K) => boolean): GenerationId {
+		if (this.liveGenerationId === undefined) {
+			throw new Error("beginReplacement requires a live generation; use beginGeneration for a cold build");
+		}
+		this.currentGenerationId += 1;
+		this.stagingGenerationId = this.currentGenerationId;
+		this.staging = new StagingBuild<K, V>([...this.current].filter(([key]) => retain(key)));
+		return this.stagingGenerationId;
+	}
+
+	/** The replacement or cold build still being staged, or `undefined` when the write target is live. */
+	get candidateGeneration(): GenerationId | undefined {
+		return this.staging === undefined || this.staging.isPromoted ? undefined : this.stagingGenerationId;
 	}
 
 	isCurrentGeneration(id: GenerationId): boolean {

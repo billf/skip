@@ -442,3 +442,116 @@ test("promote leaves tombstoned keys out of the published snapshot", async () =>
 test("revisionKey is the input key the source publishes", () => {
 	assert.equal(revisionKey({ component: "chat", table: "messages", _id: "m1" }), KEY_M1);
 });
+
+// --- G2: replacement candidates cloned from last-good ------------------------
+
+const MESSAGES = { component: "chat", table: "messages" };
+const LIKES = { component: "chat", table: "likes" };
+const KEY_L1 = "chat\u0000likes\u0000l1";
+
+/** A live generation holding message m1 (ts 10) and like l1 (ts 11). */
+async function liveTwoTables(): Promise<{ source: RevisionDeltaSource<Doc>; live: number }> {
+	const source = new RevisionDeltaSource<Doc>();
+	const live = source.beginGeneration();
+	const ledger = source.beginPage(live, ["g10"])!;
+	await source.applyGroup(live, ledger, "g10", [entry({ ts: "10" }), entry({ ts: "11", table: "likes", _id: "l1", doc: { body: "like" } })]);
+	assert.equal(source.promote(live), true);
+	return { source, live };
+}
+
+test("beginReplacement clones live minus the truncated tables and leaves the published snapshot alone", async () => {
+	const { source, live } = await liveTwoTables();
+	const candidate = source.beginReplacement([MESSAGES]);
+	assert.notEqual(candidate, live);
+	assert.equal(source.candidateGeneration, candidate);
+	assert.deepEqual(source.stateEntries(candidate), [[KEY_L1, [{ body: "like" }]]]);
+	// Last-good stays published, unchanged, until the candidate promotes.
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+	assert.deepEqual(source.currentSnapshot.get(KEY_L1), [{ body: "like" }]);
+	// The candidate is the single write target: the old live id is fenced.
+	assert.equal(source.isLive(live), false);
+	assert.equal(source.isCurrentGeneration(candidate), true);
+	const drops = source.lateEventDropCount;
+	assert.equal(source.truncate(live, [LIKES]), false, "truncating the fenced live id is a late drop, not a write");
+	assert.equal(source.lateEventDropCount, drops + 1);
+});
+
+test("a truncated table's rows re-apply at their old timestamps; untouched tables still ignore old replays", async () => {
+	const { source } = await liveTwoTables();
+	const candidate = source.beginReplacement([MESSAGES]);
+	const ledger = source.beginPage(candidate, ["r1"])!;
+	const result = await source.applyGroup(candidate, ledger, "r1", [
+		entry({ ts: "10", doc: { body: "re-imported" } }), // same ts as the truncated original
+		entry({ ts: "11", table: "likes", _id: "l1", doc: { body: "like" } }), // replay of an untouched table
+	]);
+	assert.equal(result.status === "applied" && result.replayIgnored, 1);
+	assert.deepEqual(new Map(source.stateEntries(candidate)), new Map([
+		[KEY_M1, [{ body: "re-imported" }]],
+		[KEY_L1, [{ body: "like" }]],
+	]));
+});
+
+test("a second truncate during a rebuild clears only that table and keeps the rebuilt one", async () => {
+	const { source } = await liveTwoTables();
+	const candidate = source.beginReplacement([MESSAGES]);
+	const ledger = source.beginPage(candidate, ["r1"])!;
+	await source.applyGroup(candidate, ledger, "r1", [entry({ ts: "50", _id: "m9", doc: { body: "rebuilt" } })]);
+	assert.equal(source.truncate(candidate, [LIKES]), true);
+	assert.deepEqual(source.stateEntries(candidate), [["chat\u0000messages\u0000m9", [{ body: "rebuilt" }]]]);
+	// A replayed truncate of the same table is harmless.
+	assert.equal(source.truncate(candidate, [LIKES]), true);
+	assert.deepEqual(source.stateEntries(candidate), [["chat\u0000messages\u0000m9", [{ body: "rebuilt" }]]]);
+});
+
+test("a second beginReplacement fences the old candidate and re-clones from live, which stays published", async () => {
+	const { source } = await liveTwoTables();
+	const first = source.beginReplacement([MESSAGES]);
+	const ledger = source.beginPage(first, ["r1"])!;
+	await source.applyGroup(first, ledger, "r1", [entry({ ts: "50", _id: "m9", doc: { body: "partial" } })]);
+
+	const second = source.beginReplacement([MESSAGES]);
+	assert.notEqual(second, first);
+	const late = await source.applyGroup(first, ledger, "r1", [entry({ ts: "51", _id: "m8", doc: { body: "late" } })]);
+	assert.equal(late.status, "late-generation-dropped");
+	assert.deepEqual(source.stateEntries(second), [[KEY_L1, [{ body: "like" }]]], "cloned from live, not from the discarded candidate");
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+});
+
+test("promoting a replacement publishes the clone plus rebuilt rows in one call and fences the old live generation", async () => {
+	const { source, live } = await liveTwoTables();
+	const candidate = source.beginReplacement([MESSAGES]);
+	const ledger = source.beginPage(candidate, ["r1"])!;
+	await source.applyGroup(candidate, ledger, "r1", [entry({ ts: "50", _id: "m9", doc: { body: "rebuilt" } })]);
+	const { batches, publish } = recorder();
+	assert.equal(await source.promoteWith(candidate, publish), true);
+	assert.equal(batches.length, 1);
+	assert.deepEqual(new Map(batches[0] as [string, Doc[]][]), new Map([
+		[KEY_L1, [{ body: "like" }]],
+		["chat\u0000messages\u0000m9", [{ body: "rebuilt" }]],
+	]));
+	assert.equal(source.currentSnapshot.has(KEY_M1), false, "the truncated table's old rows are gone");
+	assert.equal(source.isLive(candidate), true);
+	assert.equal(source.liveGeneration, candidate);
+	assert.equal(source.candidateGeneration, undefined);
+	assert.equal(source.beginPage(live, ["x"]), undefined, "the old live generation is fenced");
+});
+
+test("beginReplacement with nothing live throws; truncate on the live generation points to beginReplacement", async () => {
+	const cold = new RevisionDeltaSource<Doc>();
+	assert.throws(() => cold.beginReplacement([MESSAGES]), /live/);
+	const { source, live } = await liveTwoTables();
+	assert.throws(() => source.truncate(live, [MESSAGES]), /beginReplacement/);
+});
+
+test("a cold generation can truncate its own staged rows", async () => {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	const ledger = source.beginPage(gen, ["g10"])!;
+	await source.applyGroup(gen, ledger, "g10", [entry({ ts: "10" })]);
+	assert.equal(source.truncate(gen, [MESSAGES]), true);
+	assert.deepEqual(source.stateEntries(gen), []);
+	// Truncation forgets the watermark too, so the re-synced row applies.
+	const again = source.beginPage(gen, ["g10b"])!;
+	const result = await source.applyGroup(gen, again, "g10b", [entry({ ts: "10" })]);
+	assert.equal(result.status === "applied" && result.replayIgnored, 0);
+});
