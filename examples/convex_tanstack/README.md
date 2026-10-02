@@ -25,8 +25,17 @@ data**.
 
 Run `npm test`, `npm run typecheck`, and `npm run build` for verification. The
 build emits a fetch-style Start server entry; choose a supported deployment
-adapter (for example Nitro) to serve it. The development proxy for Skip is not a
-production gateway.
+adapter (for example Nitro) to serve it.
+
+> **The development proxy for Skip is not a production gateway.** It forwards
+> Skip's entire *control* API (port 8081) to the browser, including
+> `PATCH /v1/inputs/:collection`, which writes. That is fine against a localhost
+> listener and unsafe behind a public origin. A deployment should expose only the
+> streaming port's `GET /v1/streams/:uuid` and mint stream UUIDs from its own
+> authenticated endpoint; CORS is not a substitute, since it constrains
+> cooperative pages rather than direct requests. See
+> [DESIGN.md](../convex_reactive/DESIGN.md#the-skip-control-api-is-not-a-browser-facing-surface)
+> for the full reasoning and `examples/hackernews` for a worked gateway split.
 
 ## What to inspect
 
