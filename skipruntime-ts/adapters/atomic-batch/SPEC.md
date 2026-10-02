@@ -79,6 +79,24 @@ direction requires; the two are never mixed within one batch.
 - Generation-fencing, replay-ledger, and tombstone/GC rules are specified
   separately in the revision-delta extension (P4, P5, P9); this baseline
   section only fixes the wire shape and the idempotency rule.
+- **Live delivery and replacement (added 2026-10-01 for 1c's U4).** The
+  lifecycle has exactly one write target at a time: a candidate, if one
+  is being staged, and otherwise the live (promoted) generation. Writes for
+  any other generation are dropped and counted as late.
+  - **Live groups.** Once a generation is live, each consistency group is
+    published as one `writer.update(..., false)` call. The group's
+    watermarks and live rows commit only after that call resolves, so a
+    rejected update leaves nothing behind and re-applies on retry.
+  - **Promotion.** A candidate promotes with one `writer.update(entries,
+    true)` call that carries its whole state. Tombstoned keys are not part
+    of a published snapshot.
+  - **Replacement.** A truncate while a generation is live starts a
+    replacement candidate. It clones the live state, rows and watermarks,
+    minus the truncated tables. Last-good stays published, marked stale by
+    the consumer, until the candidate promotes. A further truncate clears
+    only that table in the existing candidate. A truncated table's
+    watermarks are forgotten, so its re-synced rows apply even at their old
+    timestamps.
 
 ## Source-only scope (P3)
 

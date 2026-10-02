@@ -49,6 +49,15 @@ export function compareTs(a: string | bigint, b: string | bigint): number {
 
 type RetainedRevision<Doc extends Json> = { readonly ts: string | bigint; readonly deleted: boolean; readonly doc: Doc | null };
 
+/** One table, as named in a Data Sync truncate. */
+export type TableRef = { readonly component: string; readonly table: string };
+
+/** True when the `revisionKey`-shaped `key` belongs to one of `tables`. */
+function keyInTables(key: string, tables: readonly TableRef[]): boolean {
+	const [component, table] = key.split("\u0000");
+	return tables.some((ref) => ref.component === component && ref.table === table);
+}
+
 /**
  * The key a revision-delta source publishes for one document:
  * `component \0 table \0 _id`. NUL never appears in a component path, table
@@ -190,6 +199,25 @@ export class RevisionDeltaApplier<Doc extends Json> {
 	get retainedSize(): number {
 		return this.retained.size;
 	}
+
+	/**
+	 * Forgets every retained revision and swept watermark for `tables`. A
+	 * truncated table is re-synced from scratch, often at timestamps at or
+	 * below the ones it had, so its old watermarks must not mark the re-synced
+	 * rows as replays. Other tables keep their replay protection.
+	 */
+	truncate(tables: readonly TableRef[]): void {
+		for (const key of [...this.retained.keys()]) if (keyInTables(key, tables)) this.retained.delete(key);
+		for (const key of [...this.watermarks.keys()]) if (keyInTables(key, tables)) this.watermarks.delete(key);
+	}
+
+	/** An independent copy (watermarks and retained revisions), for seeding a replacement candidate. */
+	clone(): RevisionDeltaApplier<Doc> {
+		const copy = new RevisionDeltaApplier<Doc>();
+		for (const [key, revision] of this.retained) copy.retained.set(key, revision);
+		for (const [key, ts] of this.watermarks) copy.watermarks.set(key, ts);
+		return copy;
+	}
 }
 
 export type ApplyResult<Doc extends Json> =
@@ -246,6 +274,49 @@ export class RevisionDeltaSource<Doc extends Json> {
 
 	get liveGeneration(): GenerationId | undefined {
 		return this.generations.liveGeneration;
+	}
+
+	/** The cold build or replacement candidate still being staged, if any. */
+	get candidateGeneration(): GenerationId | undefined {
+		return this.generations.candidateGeneration;
+	}
+
+	/**
+	 * Begins a replacement candidate when Data Sync truncates `truncates` while a generation is live. The candidate
+	 * is the live snapshot minus those tables, with a copy of the live watermarks minus those tables, and it becomes
+	 * the single write target. The live snapshot stays published (the consumer marks it stale) until the candidate
+	 * promotes. An earlier candidate is discarded and fenced. Throws if nothing is live; a cold build uses
+	 * `beginGeneration`.
+	 */
+	beginReplacement(truncates: readonly TableRef[]): GenerationId {
+		const live = this.generations.liveGeneration;
+		const liveApplier = live === undefined ? undefined : this.appliers.get(live);
+		if (live === undefined || liveApplier === undefined) {
+			throw new Error("beginReplacement requires a live generation; use beginGeneration for a cold build");
+		}
+		const id = this.generations.beginReplacement((key) => !keyInTables(key, truncates));
+		const candidateApplier = liveApplier.clone();
+		candidateApplier.truncate(truncates);
+		for (const other of [...this.appliers.keys()]) if (other !== live) this.appliers.delete(other);
+		this.appliers.set(id, candidateApplier);
+		return id;
+	}
+
+	/**
+	 * Clears `truncates` from the staging generation `id` (a further truncate while a candidate builds, or one on a
+	 * cold page): its rows and its watermarks for those tables, nothing else. Returns `false`, counted as a late drop,
+	 * for a stale `id`. Throws for the live generation, whose truncates start a replacement via `beginReplacement`.
+	 */
+	truncate(id: GenerationId, truncates: readonly TableRef[]): boolean {
+		if (this.isLive(id)) {
+			throw new Error(`truncate: generation ${id} is live; start a replacement with beginReplacement`);
+		}
+		const staging = this.generations.stagingFor(id);
+		const applier = this.appliers.get(id);
+		if (staging === undefined || applier === undefined) return false;
+		staging.deleteWhere((key) => keyInTables(key, truncates));
+		applier.truncate(truncates);
+		return true;
 	}
 
 	/**
