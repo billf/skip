@@ -117,7 +117,7 @@ class ProjectSummariesResource implements Resource<Graph> {
   }
 }
 
-export function createService(convexUrl: string): SkipService<{}, Graph> {
+export function createService(convexUrl: string): SkipService<{}, {}, Graph> {
   const convex = new ConvexExternalService<WorkspaceRow>(convexUrl, {
     workspace: {
       query: api.workspace.snapshot,
@@ -127,7 +127,7 @@ export function createService(convexUrl: string): SkipService<{}, Graph> {
   });
 
   return {
-    initialData: {},
+    inputs: {},
     resources: { projectSummaries: ProjectSummariesResource },
     externalServices: { convex },
     createGraph(_inputs: {}, context: Context): Graph {
