@@ -13,6 +13,7 @@ const config: CollectionConfig<ProjectSummary, string> = {
       let disposed = false;
       let source: EventSource | undefined;
       let streamId: string | undefined;
+      let retry: ReturnType<typeof setTimeout> | undefined;
       let ready = false;
       const current = new Map<string, ProjectSummary>();
 
@@ -61,7 +62,7 @@ const config: CollectionConfig<ProjectSummary, string> = {
         }
       };
 
-      void (async () => {
+      const connect = async (): Promise<void> => {
         const response = await fetch(
           "/skip-control/v1/streams/projectSummaries",
           {
@@ -83,18 +84,41 @@ const config: CollectionConfig<ProjectSummary, string> = {
         source.addEventListener("init", (event) => receive(event, true));
         source.addEventListener("update", (event) => receive(event, false));
         source.onerror = () => {
-          // EventSource retries on its own; only a CLOSED socket is fatal. Skip
-          // 404s a stale stream id after a restart, which lands here -- without
-          // this the collection would keep serving stale rows with isError false.
+          // EventSource retries on its own; only a CLOSED socket is fatal. A
+          // Skip restart destroys every minted stream id, so this one now 404s
+          // and would be retried forever while the collection silently served
+          // stale rows with isError false. Mint a fresh stream instead; its
+          // `init` truncates and repopulates the collection.
           if (source?.readyState !== EventSource.CLOSED) return;
-          const error = new Error("Skip event stream disconnected");
-          if (ready) console.error(error);
-          else markError(error);
+          reconnect();
         };
-      })().catch(markError);
+      };
+
+      const reconnect = () => {
+        if (disposed) return;
+        source?.close();
+        source = undefined;
+        streamId = undefined;
+        // Fixed delay is deliberate: an example should be readable, and a real
+        // client wants capped exponential backoff with jitter here.
+        retry = setTimeout(() => {
+          void connect().catch(onFailure);
+        }, 1000);
+      };
+
+      const onFailure = (error: unknown) => {
+        if (disposed) return;
+        // Before the collection is ready a failure is terminal for preload();
+        // after it, the rows already on screen stay usable while we retry.
+        if (ready) console.error("Skip stream failed", error);
+        else markError(error);
+      };
+
+      void connect().catch(onFailure);
 
       return () => {
         disposed = true;
+        if (retry !== undefined) clearTimeout(retry);
         source?.close();
         if (streamId !== undefined) {
           void fetch(`/skip-control/v1/streams/${streamId}`, {
