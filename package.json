@@ -12,6 +12,7 @@
     "skipruntime-ts/helpers",
     "skipruntime-ts/wasm",
     "skipruntime-ts/addon",
+    "skipruntime-ts/adapters/convex",
     "skipruntime-ts/adapters/kafka",
     "skipruntime-ts/adapters/postgres",
     "skipruntime-ts/tests",
@@ -21,6 +22,8 @@
     "sql/ts",
     "sql/ts/tests",
     "examples/cache_invalidation/edge_service",
+    "examples/convex_reactive",
+    "examples/convex_tanstack",
     "examples/hackernews/reactive_service",
     "examples/chatroom/reactive_service",
     "examples/blogger/reactive_service"
