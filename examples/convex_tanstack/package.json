@@ -17,7 +17,7 @@
     "pretypecheck": "npm run build --workspace=@skip-adapter/convex",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build --workspace=@skip-adapter/convex",
-    "test": "tsx --test skip/service.test.ts"
+    "test": "tsx --test skip/*.test.ts"
   },
   "dependencies": {
     "@convex-dev/react-query": "^0.1.0",
