@@ -19,7 +19,8 @@ import {
 export type { GenerationId, PendingPageLedger } from "./generation.js";
 
 /**
- * One revision-delta envelope. `ts` is carried as a string or `bigint`
+ * One revision-delta envelope (the input shape; `RevisionEnvelope` in split.ts is the same wire shape with a
+ * different `ts`/`doc` typing, pending the decision recorded in SPEC.md). `ts` is carried as a string or `bigint`
  * (never a plain `number`) because Convex/Data-Sync timestamps routinely
  * exceed `2^53`, where `number` silently loses precision; `doc` is `null`
  * for a tombstone (`deleted: true`).
@@ -268,7 +269,12 @@ export type ApplyGroupResult<Doc extends Json> =
     }
   | { readonly status: "late-generation-dropped" };
 
-/** Hands Skip one atomic update; resolves once Skip accepted it. */
+/**
+ * Hands Skip one atomic update; resolves once Skip accepted it.
+ *
+ * The values are the bare docs (`[key, [doc]]`; a tombstone is `[key, []]`), not `RevisionEnvelope`s, so this payload
+ * is not `SplitByTable` input. See "Open decision: the revision envelope on the live path" in SPEC.md.
+ */
 export type Publish<Doc extends Json> = (
   changes: Entry<string, Doc>[],
 ) => Promise<void>;
