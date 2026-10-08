@@ -977,3 +977,56 @@ test("a generation superseded while its publish is in flight is dropped and coun
     assert.equal(source.isLive(gen), false);
   }
 });
+
+test("a stale id reports staleness with the sentinel the class docstring tabulates, counting late drops only where it says", async () => {
+  const source = new RevisionDeltaSource<Doc>();
+  const gen = source.beginGeneration();
+  const ledger = source.beginPage(gen, ["g1"])!;
+  source.beginGeneration(); // supersedes gen
+
+  // Counted: each stale call adds exactly one late drop.
+  const counted: [string, () => unknown, unknown][] = [
+    [
+      "applyEntry",
+      () => source.applyEntry(gen, entry()),
+      { status: "late-generation-dropped" },
+    ],
+    ["beginPage", () => source.beginPage(gen, ["g2"]), undefined],
+    ["truncate", () => source.truncate(gen, []), false],
+    ["abandonIncompletePages", () => source.abandonIncompletePages(gen), false],
+    ["promote", () => source.promote(gen), false],
+    [
+      "markGroupComplete",
+      () => source.markGroupComplete(gen, ledger, "g1"),
+      false,
+    ],
+  ];
+  for (const [name, call, expected] of counted) {
+    const before = source.lateEventDropCount;
+    assert.deepEqual(call(), expected, name);
+    assert.equal(source.lateEventDropCount, before + 1, `${name} counts`);
+  }
+  {
+    const before = source.lateEventDropCount;
+    assert.deepEqual(
+      await source.applyGroup(gen, ledger, "g1", [entry()]),
+      { status: "late-generation-dropped" },
+      "applyGroup",
+    );
+    assert.equal(await source.promoteWith(gen, async () => {}), false);
+    assert.equal(source.lateEventDropCount, before + 2, "async methods count");
+  }
+
+  // Query-only: same staleness, no count.
+  const queries: [string, () => unknown, unknown][] = [
+    ["stateEntries", () => source.stateEntries(gen), undefined],
+    ["sweepTombstones", () => source.sweepTombstones(gen, "1"), false],
+    ["isCurrentGeneration", () => source.isCurrentGeneration(gen), false],
+    ["isLive", () => source.isLive(gen), false],
+  ];
+  for (const [name, call, expected] of queries) {
+    const before = source.lateEventDropCount;
+    assert.deepEqual(call(), expected, name);
+    assert.equal(source.lateEventDropCount, before, `${name} does not count`);
+  }
+});

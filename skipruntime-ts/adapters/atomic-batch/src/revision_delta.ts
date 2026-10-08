@@ -264,6 +264,26 @@ export type Publish<Doc extends Json> = (
  * drops (retry-safe: marking an already-marked group is a no-op and still
  * returns `true`); only query-only checks (`isCurrentGeneration`,
  * `replayedIgnored`, `currentSnapshot`) never count.
+ *
+ * Stale-id signals: one condition (the `id` is no longer the write target)
+ * is reported per method, and the sentinels are not interchangeable. Check
+ * the one for the method you called:
+ *
+ * | method                                                  | stale `id` returns                        | counted as late drop |
+ * | ------------------------------------------------------- | ----------------------------------------- | -------------------- |
+ * | `applyEntry`                                            | `{ status: "late-generation-dropped" }`   | yes                  |
+ * | `applyGroup`                                            | `{ status: "late-generation-dropped" }`   | yes                  |
+ * | `beginPage`                                             | `undefined`                               | yes                  |
+ * | `truncate`, `abandonIncompletePages`                    | `false`                                   | yes                  |
+ * | `promote`, `promoteWith`, `markGroupComplete`           | `false`                                   | yes                  |
+ * | `stateEntries`                                          | `undefined`                               | no (query-only)      |
+ * | `sweepTombstones`, `isCurrentGeneration`, `isLive`      | `false`                                   | no (query-only)      |
+ *
+ * `applyGroup` and `promoteWith` also report staleness found only after
+ * `await publish(...)` (a generation swap mid-publish) the same way, and
+ * count it once. `undefined` means "stale" only from `beginPage` and
+ * `stateEntries`; `replayedIgnored` and `retainedSize` return `0` for any
+ * unknown id, so a `0` there is not evidence of a live generation.
  */
 export class RevisionDeltaSource<Doc extends Json> {
   private readonly generations = new GenerationManager<
