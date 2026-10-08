@@ -11,6 +11,9 @@
 import { HarnessError } from "../readiness.js";
 import type { BaselineExpectedState, PublicationState } from "./state.js";
 
+/** A fault's trigger; returning exactly `false` declares a no-op (see `FaultInjector.trigger`). */
+export type FaultTrigger = () => void | boolean | Promise<void | boolean>;
+
 export type FaultInjector = {
 	readonly name: string;
 	readonly counterName: string;
@@ -22,7 +25,7 @@ export type FaultInjector = {
 	 * verified fault occurrences, not trigger attempts. Any other return
 	 * (including `void`) means the fault was injected.
 	 */
-	trigger(): void | boolean | Promise<void | boolean>;
+	trigger: FaultTrigger;
 };
 
 /**
@@ -51,7 +54,7 @@ export type FaultCheckpoint = {
 export class FaultAssertionError extends HarnessError {}
 
 /** Disconnect before a checkpoint, then reconnect: the last-good result freezes until recovery. */
-export function disconnectBeforeCheckpointFault(trigger: () => void | boolean | Promise<void | boolean>): FaultInjector {
+export function disconnectBeforeCheckpointFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "disconnect-before-checkpoint", counterName: "reconnects", expectedState: "frozen", trigger };
 }
 
@@ -61,17 +64,17 @@ export function disconnectBeforeCheckpointFault(trigger: () => void | boolean | 
  * no trigger for this and the baseline's query-state faults do not apply
  * to it.
  */
-export function queryFailedFault(trigger: () => void | boolean | Promise<void | boolean>): FaultInjector {
+export function queryFailedFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "query-failed", counterName: "queryFailed", expectedState: "frozen", trigger };
 }
 
 /** `QueryRemoved`: intentional unsubscribe/removal, not a failure -- the result empties, never freezes stale. */
-export function queryRemovedFault(trigger: () => void | boolean | Promise<void | boolean>): FaultInjector {
+export function queryRemovedFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "query-removed", counterName: "queryRemoved", expectedState: "blank", trigger };
 }
 
 /** A query with no prior good result yet: nothing to freeze, so `not-yet-loaded`, never blank-as-current. */
-export function notYetLoadedFault(trigger: () => void | boolean | Promise<void | boolean>): FaultInjector {
+export function notYetLoadedFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "not-yet-loaded", counterName: "notYetLoaded", expectedState: "not-yet-loaded", trigger };
 }
 
@@ -87,7 +90,7 @@ export function notYetLoadedFault(trigger: () => void | boolean | Promise<void |
  * legitimate and out of scope for `run()` -- assert that settled state
  * via `assertRecovered` at the next checkpoint, not via `run()`.
  */
-export function multiTableTransactionFault(trigger: () => void | boolean | Promise<void | boolean>): FaultInjector {
+export function multiTableTransactionFault(trigger: FaultTrigger): FaultInjector {
 	return {
 		name: "multi-table-transaction",
 		counterName: "atomicBatches",
@@ -104,7 +107,7 @@ export function multiTableTransactionFault(trigger: () => void | boolean | Promi
  * flags it here so a resolution to that open question can update it in
  * one place.
  */
-export function slowConsumerBacklogExhaustionFault(trigger: () => void | boolean | Promise<void | boolean>): FaultInjector {
+export function slowConsumerBacklogExhaustionFault(trigger: FaultTrigger): FaultInjector {
 	return {
 		name: "slow-consumer-backlog-exhaustion",
 		counterName: "backlogExhaustion",

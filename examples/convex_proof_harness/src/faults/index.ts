@@ -9,6 +9,7 @@ export {
 	slowConsumerBacklogExhaustionFault,
 	type FaultCheckpoint,
 	type FaultInjector,
+	type FaultTrigger,
 	type ObservePublicationState,
 } from "./injector.js";
 

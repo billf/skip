@@ -61,9 +61,27 @@ test("computeParity reproduces the vendored empty-table hash used by every V1-V6
 	assert.equal(contentHash, vendored.vectors["V4"]!["likes"]!.contentHash);
 });
 
-test("loadVendoredParity fails on algorithm or fixture-set-version mismatch", () => {
+test("loadVendoredParity accepts the pinned algorithm and fixture-set version", () => {
 	assert.equal(loadVendoredParity().hashAlgorithm, PARITY_HASH_ALGORITHM);
 	assert.equal(loadVendoredParity().fixtureSetVersion, EXPECTED_FIXTURE_SET_VERSION);
+});
+
+test("loadVendoredParity fails on a fixture-set-version or algorithm mismatch", () => {
+	const dir = mkdtempSync(join(tmpdir(), "parity-version-"));
+	const write = (name: string, record: Record<string, unknown>): string => {
+		const path = join(dir, name);
+		writeFileSync(path, JSON.stringify(record));
+		return path;
+	};
+	const good = { hashAlgorithm: PARITY_HASH_ALGORITHM, fixtureSetVersion: EXPECTED_FIXTURE_SET_VERSION, vectors: {} };
+	assert.throws(
+		() => loadVendoredParity(write("version.json", { ...good, fixtureSetVersion: "0.0.0" })),
+		(err: unknown) => err instanceof HarnessError && /fixture set version/.test(err.message),
+	);
+	assert.throws(
+		() => loadVendoredParity(write("algorithm.json", { ...good, hashAlgorithm: "md5" })),
+		(err: unknown) => err instanceof HarnessError && /hash algorithm/.test(err.message),
+	);
 });
 
 test("computeParity reproduces the non-empty V1/V2/V5 golden vectors from raw fixture rows plus labels", () => {
