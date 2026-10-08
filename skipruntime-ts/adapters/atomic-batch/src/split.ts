@@ -12,7 +12,14 @@ export type TaggedRow = {
   readonly doc: Json;
 };
 
-/** One row of a `RevisionDeltaBatch`, carrying its own table tag and tombstone flag. */
+/**
+ * One row of a `RevisionDeltaBatch`, carrying its own table tag and tombstone flag.
+ *
+ * Known divergence: `RevisionDeltaEntry` (revision_delta.ts) describes the same wire shape with `ts: string | bigint`
+ * and a nullable `doc`, and `RevisionDeltaSource.applyGroup` publishes bare docs rather than this envelope. Both are
+ * pending a decision; see "Open decision: the revision envelope on the live path" in SPEC.md. Do not feed
+ * `applyGroup`'s publish payload to `SplitByTable`.
+ */
 export type RevisionEnvelope = {
   readonly ts: string | number;
   readonly deleted: boolean;

@@ -98,6 +98,63 @@ direction requires; the two are never mixed within one batch.
     watermarks are forgotten, so its re-synced rows apply even at their old
     timestamps.
 
+## Open decision: the revision envelope on the live path
+
+**Status: undecided. Needs an owner's call.** Until it is made, `RevisionDeltaSource.applyGroup` and
+`promoteWith` cannot feed `SplitByTable`, and the harness's revision reference deliberately does not use them.
+
+### What diverges today
+
+| | `RevisionDeltaSource.applyGroup` / `promoteWith` | `SplitByTable` input |
+|---|---|---|
+| Upsert value | the bare doc, `[key, [doc]]` | a `RevisionEnvelope` (`table`, `component`, `deleted`, `ts`, `doc`, ...) |
+| Tombstone | `[key, []]` | an envelope with `deleted: true` (dropped by the mapper) |
+| `ts` | not published | `string \| number` |
+
+- Wiring `publish` straight into a `SplitByTable`-backed collection throws `split: unknown table "undefined"` on the
+  first live group (reproduced with a scratch script), because a bare doc has no `table`.
+- `reference/revision.ts` avoids the live methods: it loops `applyEntry`/`markGroupComplete` on a generation that is
+  never promoted and hand-publishes the entry as an envelope behind an `as` cast. So the revision proof's green
+  verdict does not exercise `applyGroup`'s publish-then-commit ordering, supersession during publish, or `promoteWith`.
+- Two exported types describe one wire shape: `RevisionEnvelope` (`split.ts`: `ts: string | number`, `doc: Json`) and
+  `RevisionDeltaEntry` (`revision_delta.ts`: `ts: string | bigint`, `doc: Doc | null`). `number` contradicts the
+  never-a-plain-number rule for timestamps above 2^53, and `doc: Json` rejects the `null` a tombstone carries.
+  Neither type checks against the other; the `as` cast hides it.
+
+### Options
+
+**A. Publish envelopes (recommended).** Upserts go to Skip as the wire envelope; tombstones stay `[key, []]`, a real
+Skip delete that leaves no row behind. One wire type, `ts: string` (a JSON value, so never `bigint` or `number`);
+`RevisionDeltaEntry` is that type with `ts: string | bigint` accepted on input and normalized by a small
+`toEnvelope()`. Staging and the live snapshot then hold envelopes, so `stateEntries()` and the `isInit` snapshot are
+already `SplitByTable` input.
+- Why: matches what the reference and the recorded transcripts already publish, keeps the revision visible
+  downstream, needs no second mapper, and `SplitByTable`'s envelope branch and tests already exist.
+- Cost: the snapshot value type changes from `Doc` to the envelope, a breaking change to
+  `currentSnapshot`/`stateEntries` (internal today: the only in-repo consumer is the harness), and every row carries
+  its metadata through Skip.
+
+**B. Keep bare docs; add a key-derived split mapper.** The table is already in the key
+(`component\0table\0id`), so a second mapper (`SplitRevisionKeys`) can route bare docs without an envelope.
+- Why: keeps the specified `[key, []]` / P2-doc wire shape and the published payload minimal.
+- Cost: two mappers and two input conventions, the revision is invisible downstream, the reference's envelope
+  publishing and its tests must move, and `RevisionEnvelope` is left as a dead second shape unless it is removed.
+
+**C. Status quo, documented.** Keep both shapes and rely on the docstrings added with this section.
+- Why: no code change. Cost: the trap stays (any consumer that wires the flagship method to the flagship graph
+  fails at runtime), the proof keeps running the lighter path, and the divergent types remain.
+
+### What the decision unblocks
+
+1. Switch `RevisionDeltaReferenceSource` to `applyGroup`/`promoteWith` so the revision run exercises the live path,
+   including slow-publish supersession (review finding: the proof covers a simpler path than production).
+2. One test that pipes `applyGroup`'s publish through `SplitByTable` into a Skip graph.
+3. Drop the `as Entry<Json, Json>` cast in `reference/revision.ts`.
+4. Remove or alias the duplicate type, with a compile-time assignability assertion in place of the cast.
+
+Findings that trace to this: the correctness, reliability, and adversarial reviews of this branch (envelope/seam
+mismatch, `applyGroup` publishes bare docs), and a second review of the same head (#1, #6, #7).
+
 ## Source-only scope (P3)
 
 This specification, and this package's helpers, govern **only the source
