@@ -460,9 +460,19 @@ async function runVector(ctx: RunContext, vectorId: string, vector: CorpusVector
 		}
 		const expected = resolveReferenceFeed(vector.expectedBase, idByLabel);
 		const baseMismatches = compareFeeds(vectorId, expected, nativeSample.value as unknown[]);
-		ctx.recorder.record("1a", requiredVersion, requireCurrent(stream, requiredVersion), [{ name: "mismatch", value: baseMismatches.length }]);
+		// The corpus expectation is checked against Skip's published rows as
+		// well as the native oracle, so a Skip-side defect cannot pass on the
+		// strength of native agreement alone.
+		await awaitPublicationState(stream, "current");
+		const baseSkipMismatches = compareFeeds(vectorId, expected, stream.rows);
+		ctx.recorder.record("1a", requiredVersion, requireCurrent(stream, requiredVersion), [
+			{ name: "mismatch", value: baseMismatches.length + baseSkipMismatches.length },
+		]);
 		if (baseMismatches.length > 0) {
 			throw new HarnessError(`run.ts: ${vectorId} base mismatch: ${JSON.stringify(baseMismatches)}`);
+		}
+		if (baseSkipMismatches.length > 0) {
+			throw new HarnessError(`run.ts: ${vectorId} base Skip stream mismatch: ${JSON.stringify(baseSkipMismatches)}`);
 		}
 		writeTranscript(vectorId, "base", stream.transcript);
 	} finally {
@@ -470,41 +480,89 @@ async function runVector(ctx: RunContext, vectorId: string, vector: CorpusVector
 	}
 
 	for (const [i, delta] of (vector.deltas ?? []).entries()) {
-		const args = resolveDeltaArgs(delta.args, idByLabel);
-		const deltaStream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
-		try {
-			const { value, ts } = await ctx.source.mutation(`proofVehicle/mutations:${delta.mutation}`, args);
-			deltaStream.setRequiredVersion(ts);
-			if (delta.label !== undefined) {
-				const affected = extractAffectedId(value);
-				if (affected !== undefined) idByLabel.set(delta.label, affected);
-			}
+		await runDeltaCheckpoint(ctx, vectorId, `delta-${i}`, room, idByLabel, delta, vector.expectedAfterDelta?.[i]);
+	}
 
-			deltaStream.readiness.observeGate1({ kind: "source-version", ts });
-			await awaitGate2(deltaStream.readiness, 30_000, deltaStream);
+	// Independent deltas each start from a freshly loaded base (they are not
+	// cumulative like `deltas`), so a delete cannot be masked by an earlier
+	// delete. V5 has only these, so skipping them would leave every delete
+	// path unexercised while the run still reported a match.
+	for (const [i, independent] of (vector.independentDeltas ?? []).entries()) {
+		console.log(`[reference:snapshot] ${vectorId}: independent delta ${i} (${independent.title})`);
+		await runFixtureReset(ctx.target);
+		const freshLabels = new Map<string, string>(Object.entries(await runLoader(vectorId, ctx.target)));
+		const freshRoom = resolveLabel(freshLabels, "r");
+		await runDeltaCheckpoint(
+			ctx,
+			vectorId,
+			`independent-${i}`,
+			freshRoom,
+			freshLabels,
+			{ mutation: independent.mutation, args: independent.args },
+			independent.expected,
+		);
+	}
 
-			const expectedAfter = vector.expectedAfterDelta?.[i];
-			if (expectedAfter !== null && expectedAfter !== undefined) {
-				const deltaReader = makeNativeReader(ctx, room);
-				const sample = await deltaReader.sampleAtOrPast(ts, () => ctx.source.latestCommittedMutationVersion);
-				if (sample.kind !== "admitted") {
-					throw new HarnessError(`run.ts: ${vectorId} delta ${i} native sample incomparable: ${sample.reason}`);
-				}
-				const expectedRows = resolveReferenceFeed(expectedAfter, idByLabel);
-				const mismatches = compareFeeds(vectorId, expectedRows, sample.value as unknown[]);
-				ctx.recorder.record("1a", ts, requireCurrent(deltaStream, ts), [{ name: "mismatch", value: mismatches.length }]);
-				if (mismatches.length > 0) {
-					throw new HarnessError(`run.ts: ${vectorId} delta ${i} mismatch: ${JSON.stringify(mismatches)}`);
-				}
-			}
-			writeTranscript(vectorId, `delta-${i}`, deltaStream.transcript);
-		} finally {
-			await deltaStream.close();
-		}
+	if ((vector.expectedAfterDelta?.length ?? 0) > (vector.deltas?.length ?? 0)) {
+		throw new HarnessError(`run.ts: ${vectorId} has expectedAfterDelta entries with no matching delta`);
 	}
 
 	if (vectorId === "V6") {
 		await runV6TornVariants(ctx);
+	}
+}
+
+/**
+ * Issues one delta against a fresh stream, waits for gate 1 (the mutation's
+ * own settling transition) and gate 2 (SSE checkpoint), then compares the
+ * expected feed against both the native oracle and Skip's published rows.
+ * A `null`/`undefined` expectation skips the comparison (transient states).
+ */
+async function runDeltaCheckpoint(
+	ctx: RunContext,
+	vectorId: string,
+	tag: string,
+	room: string,
+	idByLabel: Map<string, string>,
+	delta: { mutation: string; args: Record<string, unknown>; label?: string },
+	expectedAfter: import("../src/corpus.js").CorpusOutRow[] | null | undefined,
+): Promise<void> {
+	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
+	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
+	const args = resolveDeltaArgs(delta.args, idByLabel);
+	const deltaStream = await openStream({ controlUrl, streamingUrl }, ROOM_FEED_RESOURCE, { room }, 0, "quiesced");
+	try {
+		const { value, ts } = await ctx.source.mutation(`proofVehicle/mutations:${delta.mutation}`, args);
+		deltaStream.setRequiredVersion(ts);
+		if (delta.label !== undefined) {
+			const affected = extractAffectedId(value);
+			if (affected !== undefined) idByLabel.set(delta.label, affected);
+		}
+
+		deltaStream.readiness.observeGate1({ kind: "source-version", ts });
+		await awaitGate2(deltaStream.readiness, 30_000, deltaStream);
+
+		if (expectedAfter !== null && expectedAfter !== undefined) {
+			const deltaReader = makeNativeReader(ctx, room);
+			const sample = await deltaReader.sampleAtOrPast(ts, () => ctx.source.latestCommittedMutationVersion);
+			if (sample.kind !== "admitted") {
+				throw new HarnessError(`run.ts: ${vectorId} ${tag} native sample incomparable: ${sample.reason}`);
+			}
+			const expectedRows = resolveReferenceFeed(expectedAfter, idByLabel);
+			const mismatches = compareFeeds(vectorId, expectedRows, sample.value as unknown[]);
+			await awaitPublicationState(deltaStream, "current");
+			const skipMismatches = compareFeeds(vectorId, expectedRows, deltaStream.rows);
+			ctx.recorder.record("1a", ts, requireCurrent(deltaStream, ts), [{ name: "mismatch", value: mismatches.length + skipMismatches.length }]);
+			if (mismatches.length > 0) {
+				throw new HarnessError(`run.ts: ${vectorId} ${tag} mismatch: ${JSON.stringify(mismatches)}`);
+			}
+			if (skipMismatches.length > 0) {
+				throw new HarnessError(`run.ts: ${vectorId} ${tag} Skip stream mismatch: ${JSON.stringify(skipMismatches)}`);
+			}
+		}
+		writeTranscript(vectorId, tag, deltaStream.transcript);
+	} finally {
+		await deltaStream.close();
 	}
 }
 
@@ -519,9 +577,9 @@ async function runV6TornVariants(ctx: RunContext): Promise<void> {
 	const controlUrl = `http://127.0.0.1:${CONTROL_PORT}`;
 	const streamingUrl = `http://127.0.0.1:${STREAMING_PORT}`;
 
-	// V6's own atomic delta already ran in runVector's delta loop; re-verify
-	// no-torn on groupProbe for it here by watching a fresh subscription
-	// across a repeat of the same atomic mutation on a freshly reset base.
+	// Seeded two-write splits of V6's atomic mutation: groupProbe must show a
+	// torn state for each order. The atomic (no-torn) side is exercised by the
+	// revision one-group scenario; see the note at the end of this function.
 	for (const [variant, order] of [
 		["membership-first", ["membership", "like"]],
 		["likes-first", ["like", "membership"]],
@@ -576,13 +634,12 @@ async function runV6TornVariants(ctx: RunContext): Promise<void> {
 		}
 	}
 
-	// The canonical atomic path (already exercised in runVector's delta
-	// loop) must show *no* torn state; verified implicitly by that delta's
-	// gate 2/comparator pass plus this file's Q14 unit coverage (U9). A live
-	// groupProbe watch across that same atomic write is deferred to keep
-	// this run's runtime bounded; U9's synthetic coverage plus the seeded
-	// variants above (which prove groupProbe CAN distinguish both torn
-	// orders) together cover AE13's live-run intent.
+	// The canonical atomic path must show *no* torn state. The snapshot run's
+	// V6 delta is only gated by gate 2 and the comparator; a live groupProbe
+	// watch across that Convex write is deferred to keep this run's runtime
+	// bounded. The live no-torn evidence is the revision one-group scenario
+	// (which now requires the post state to be observed), plus the seeded
+	// variants above, which prove groupProbe CAN distinguish both torn orders.
 }
 
 function writeTranscript(vectorId: string, label: string, transcript: readonly string[]): void {
@@ -679,7 +736,11 @@ async function runDisconnectFault(ctx: RunContext, room: string): Promise<void> 
 		stream.readiness.observeGate1({ kind: "source-marker", ...before });
 		await awaitGate2(stream.readiness, 30_000, stream);
 		await awaitPublicationState(stream, "current");
-		ctx.recorder.record("1a", before.ts, requireCurrent(stream, before.ts), [{ name: "mismatch", value: 0 }]);
+		const beforeSample = await makeNativeReader(ctx, room).sampleAtOrPast(before.ts, () => ctx.source.latestCommittedMutationVersion);
+		if (beforeSample.kind !== "admitted") throw new HarnessError(`run.ts: F4 baseline native sample incomparable: ${beforeSample.reason}`);
+		const beforeMismatches = compareFeeds("F4", beforeSample.value as FeedRow[], stream.rows);
+		ctx.recorder.record("1a", before.ts, requireCurrent(stream, before.ts), [{ name: "mismatch", value: beforeMismatches.length }]);
+		if (beforeMismatches.length > 0) throw new HarnessError(`run.ts: F4 baseline mismatch: ${JSON.stringify(beforeMismatches)}`);
 		const injector = disconnectBeforeCheckpointFault(async () => {
 			await stream.close();
 			return stream.publicationState === "frozen";
@@ -692,6 +753,8 @@ async function runDisconnectFault(ctx: RunContext, room: string): Promise<void> 
 				kind: "stale-with-reason",
 				reason: "F4 SSE stream disconnected before checkpoint",
 			},
+			// No feed is compared at a stale checkpoint; the recorder still
+			// requires the metric, and the recovery comparison below is the check.
 			[{ name: "mismatch", value: 0 }],
 		);
 
@@ -835,8 +898,11 @@ async function runRevisionOneGroupScenario(ctx: RevisionRunContext, groupTs: () 
 	await ctx.source.applyGroup({ ts: groupTs(), rows: base.rows });
 
 	const observer = newGroupProbeObserver();
+	let postObserved = false;
 	const stream = await openStream({ controlUrl, streamingUrl }, GROUP_PROBE_RESOURCE, {}, 0, "quiesced", (watermark, entries) => {
-		observer.observe(watermark, extractWatchedValue(entries, base.messageId) as Record<string, unknown> | undefined);
+		const state = extractWatchedValue(entries, base.messageId) as Record<string, unknown> | undefined;
+		if (state?.["active"] === false && state["likeCount"] === 2) postObserved = true;
+		observer.observe(watermark, state);
 	});
 	try {
 		await awaitPublicationState(stream, "current");
@@ -846,6 +912,9 @@ async function runRevisionOneGroupScenario(ctx: RevisionRunContext, groupTs: () 
 		await ctx.source.applyGroup({ ts, rows: [delta.membershipRow, delta.likeRow] });
 		stream.readiness.observeGate1({ kind: "source-version", ts });
 		await awaitGate2(stream.readiness, 30_000, stream);
+		// "No torn state" only means something once the post state was seen:
+		// an observer that never received an update also reports `passed`.
+		await awaitObservedPost(() => postObserved);
 		if (!observer.passed) {
 			throw new HarnessError(`run.ts: revision one-group scenario observed a torn groupProbe state: ${JSON.stringify(observer.tornEvents)}`);
 		}
