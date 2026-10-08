@@ -211,20 +211,29 @@ export class ConvexReferenceSource implements ExternalService {
     args: Record<string, Value> = {},
     timeoutMs = 20_000,
   ): Promise<{ value: unknown; ts: number }> {
-    const value: unknown = await Promise.race([
-      this.client.mutation(name, args),
-      new Promise<never>((_resolve, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new HarnessError(
-                `ConvexReferenceSource: mutation "${name}" did not settle within ${timeoutMs}ms`,
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let value: unknown;
+    try {
+      // Note: the timeout rejects the caller but cannot cancel the mutation,
+      // so a timed-out mutation may still commit late. Callers treat a
+      // timeout as fatal for the run.
+      value = await Promise.race([
+        this.client.mutation(name, args),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new HarnessError(
+                  `ConvexReferenceSource: mutation "${name}" did not settle within ${timeoutMs}ms`,
+                ),
               ),
-            ),
-          timeoutMs,
-        ),
-      ),
-    ]);
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
     const observedTs = this.client.getMaxObservedTimestamp();
     if (observedTs === undefined) {
       throw new HarnessError(
