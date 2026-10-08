@@ -19,14 +19,14 @@ import { deepEqual } from "./deep_equal.js";
  * `{active: true, likeCount: 1}`, post `{active: false, likeCount: 2}`.
  */
 export type WatchedGroup = {
-	readonly resource: string;
-	readonly pre: Readonly<Record<string, unknown>>;
-	readonly post: Readonly<Record<string, unknown>>;
+  readonly resource: string;
+  readonly pre: Readonly<Record<string, unknown>>;
+  readonly post: Readonly<Record<string, unknown>>;
 };
 
 export type TornObservation = {
-	readonly watermark: string;
-	readonly state: Readonly<Record<string, unknown>>;
+  readonly watermark: string;
+  readonly state: Readonly<Record<string, unknown>>;
 };
 
 /**
@@ -41,26 +41,26 @@ export type TornObservation = {
  * key counts as a changed field.
  */
 function unionChangedFields(
-	pre: Readonly<Record<string, unknown>>,
-	post: Readonly<Record<string, unknown>>,
+  pre: Readonly<Record<string, unknown>>,
+  post: Readonly<Record<string, unknown>>,
 ): string[] {
-	const fields = new Set([...Object.keys(pre), ...Object.keys(post)]);
-	return [...fields].filter((field) => !deepEqual(pre[field], post[field]));
+  const fields = new Set([...Object.keys(pre), ...Object.keys(post)]);
+  return [...fields].filter((field) => !deepEqual(pre[field], post[field]));
 }
 
 function computeHalfTornStates(
-	pre: Readonly<Record<string, unknown>>,
-	post: Readonly<Record<string, unknown>>,
+  pre: Readonly<Record<string, unknown>>,
+  post: Readonly<Record<string, unknown>>,
 ): Record<string, unknown>[] {
-	return unionChangedFields(pre, post).map((field) => {
-		const state = { ...pre };
-		if (Object.prototype.hasOwnProperty.call(post, field)) {
-			state[field] = post[field];
-		} else {
-			delete state[field];
-		}
-		return state;
-	});
+  return unionChangedFields(pre, post).map((field) => {
+    const state = { ...pre };
+    if (Object.prototype.hasOwnProperty.call(post, field)) {
+      state[field] = post[field];
+    } else {
+      delete state[field];
+    }
+    return state;
+  });
 }
 
 /**
@@ -82,65 +82,66 @@ function computeHalfTornStates(
  * the next legitimate state, so create a fresh observer per transition.
  */
 export class NoTornObserver {
-	private readonly halfTornStates: readonly Record<string, unknown>[];
-	private readonly torn: TornObservation[] = [];
+  private readonly halfTornStates: readonly Record<string, unknown>[];
+  private readonly torn: TornObservation[] = [];
 
-	constructor(
-		private readonly group: WatchedGroup,
-		servedResources: readonly string[],
-	) {
-		if (!servedResources.includes(group.resource)) {
-			throw new HarnessError(
-				`watched resource "${group.resource}" is not served by the consumer service under test`,
-			);
-		}
-		if (deepEqual(group.pre, group.post)) {
-			throw new HarnessError(
-				`watched group "${group.resource}": pre-state and post-state are equal; cannot prove atomicity`,
-			);
-		}
-		const halfTornStates = computeHalfTornStates(group.pre, group.post);
-		if (halfTornStates.length !== 2) {
-			throw new HarnessError(
-				`watched group "${group.resource}": expected exactly two changed fields, found ` +
-					`${halfTornStates.length}; this observer only supports two-field groups whose ` +
-					`single-field partials are exactly the two write orders' intermediate states`,
-			);
-		}
-		for (const state of halfTornStates) {
-			if (deepEqual(state, group.pre) || deepEqual(state, group.post)) {
-				throw new HarnessError(
-					`watched group "${group.resource}": a single-field partial state equals its pre- or ` +
-						`post-state; this group cannot tell both write orders apart`,
-				);
-			}
-		}
-		this.halfTornStates = halfTornStates;
-	}
+  constructor(
+    private readonly group: WatchedGroup,
+    servedResources: readonly string[],
+  ) {
+    if (!servedResources.includes(group.resource)) {
+      throw new HarnessError(
+        `watched resource "${group.resource}" is not served by the consumer service under test`,
+      );
+    }
+    if (deepEqual(group.pre, group.post)) {
+      throw new HarnessError(
+        `watched group "${group.resource}": pre-state and post-state are equal; cannot prove atomicity`,
+      );
+    }
+    const halfTornStates = computeHalfTornStates(group.pre, group.post);
+    if (halfTornStates.length !== 2) {
+      throw new HarnessError(
+        `watched group "${group.resource}": expected exactly two changed fields, found ` +
+          `${halfTornStates.length}; this observer only supports two-field groups whose ` +
+          `single-field partials are exactly the two write orders' intermediate states`,
+      );
+    }
+    for (const state of halfTornStates) {
+      if (deepEqual(state, group.pre) || deepEqual(state, group.post)) {
+        throw new HarnessError(
+          `watched group "${group.resource}": a single-field partial state equals its pre- or ` +
+            `post-state; this group cannot tell both write orders apart`,
+        );
+      }
+    }
+    this.halfTornStates = halfTornStates;
+  }
 
-	/** The computed intermediate states this group's construction proved distinguishable. */
-	get expectedHalfTornStates(): readonly Record<string, unknown>[] {
-		return this.halfTornStates;
-	}
+  /** The computed intermediate states this group's construction proved distinguishable. */
+  get expectedHalfTornStates(): readonly Record<string, unknown>[] {
+    return this.halfTornStates;
+  }
 
-	/**
-	 * Records one published state for the watched group. `state` is
-	 * `undefined` for an unrelated key, a heartbeat, or any update this
-	 * group's keys are not part of -- ignored, never a false positive.
-	 */
-	observe(watermark: string, state: Record<string, unknown> | undefined): void {
-		if (state === undefined) return;
-		if (deepEqual(state, this.group.pre) || deepEqual(state, this.group.post)) return;
-		this.torn.push({ watermark, state });
-	}
+  /**
+   * Records one published state for the watched group. `state` is
+   * `undefined` for an unrelated key, a heartbeat, or any update this
+   * group's keys are not part of -- ignored, never a false positive.
+   */
+  observe(watermark: string, state: Record<string, unknown> | undefined): void {
+    if (state === undefined) return;
+    if (deepEqual(state, this.group.pre) || deepEqual(state, this.group.post))
+      return;
+    this.torn.push({ watermark, state });
+  }
 
-	get tornEvents(): readonly TornObservation[] {
-		return this.torn;
-	}
+  get tornEvents(): readonly TornObservation[] {
+    return this.torn;
+  }
 
-	get passed(): boolean {
-		return this.torn.length === 0;
-	}
+  get passed(): boolean {
+    return this.torn.length === 0;
+  }
 }
 
 /**
@@ -149,11 +150,16 @@ export class NoTornObserver {
  * `undefined`; an absent key is also `undefined`, both ignored by
  * `observe`).
  */
-export function extractWatchedValue(entries: readonly Entry[], key: unknown): Record<string, unknown> | undefined {
-	for (const [entryKey, values] of entries) {
-		if (deepEqual(entryKey, key)) {
-			return values.length === 0 ? undefined : (values[values.length - 1] as Record<string, unknown>);
-		}
-	}
-	return undefined;
+export function extractWatchedValue(
+  entries: readonly Entry[],
+  key: unknown,
+): Record<string, unknown> | undefined {
+  for (const [entryKey, values] of entries) {
+    if (deepEqual(entryKey, key)) {
+      return values.length === 0
+        ? undefined
+        : (values[values.length - 1] as Record<string, unknown>);
+    }
+  }
+  return undefined;
 }

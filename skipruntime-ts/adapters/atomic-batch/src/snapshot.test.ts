@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Entry, Json } from "@skipruntime/core";
-import { applySnapshotBatch, buildSnapshotEntries, type Writer } from "./snapshot.js";
+import {
+  applySnapshotBatch,
+  buildSnapshotEntries,
+  type Writer,
+} from "./snapshot.js";
 
 function recorder() {
   const calls: { entries: Entry<Json, Json>[]; isInit: boolean }[] = [];
@@ -37,7 +41,9 @@ test("AE1: a multi-table batch produces exactly one update", async () => {
 
 test("an unchanged key is simply omitted from the batch", async () => {
   const { calls, writer } = recorder();
-  const entries = buildSnapshotEntries([["room-feed", [{ table: "messages", doc: {} }]]]);
+  const entries = buildSnapshotEntries([
+    ["room-feed", [{ table: "messages", doc: {} }]],
+  ]);
   await applySnapshotBatch(writer, entries, { isInit: false });
   assert.deepEqual(
     calls[0]!.entries.map(([key]) => key),
