@@ -4,9 +4,16 @@
  * `@skip-adapter/atomic-batch`'s `RevisionDeltaSource`, feeding the SAME
  * room-feed/`groupProbe` graph `service.ts`'s `createReferenceService`
  * builds for U11's snapshot path -- `split.ts`'s `SplitByTable` accepts
- * both `TaggedRow` and `RevisionEnvelope` input shapes
- * (`skip: skipruntime-ts/adapters/atomic-batch/src/split.ts`'s own
- * `isRevisionEnvelope` discrimination), so no graph change is needed here.
+ * both `TaggedRow` and `RevisionEnvelope` input shapes, so no graph change
+ * is needed here.
+ *
+ * The source runs the production path: the generation is promoted once with
+ * `promoteWith` (the empty `isInit` snapshot), and every group is delivered
+ * by the live `applyGroup`, whose publish payload is already the
+ * `RevisionEnvelope` entries `SplitByTable` reads -- no reshaping and no
+ * cast. (This used to loop the staging-only `applyEntry` and hand-publish
+ * envelopes, so the run never exercised `applyGroup`'s publish-then-commit
+ * ordering.)
  *
  * Unlike `source.ts`'s `ConvexReferenceSource` (one Convex transaction ->
  * one combined-key `SnapshotBatch` write, publishing the WHOLE row array
@@ -93,8 +100,18 @@ export class RevisionDeltaReferenceSource implements ExternalService {
     }
     this.subscriber = callbacks;
     // Starts empty; every row this run cares about arrives through a
-    // later `applyGroup` call, not an initial snapshot.
-    await callbacks.update([], true);
+    // later `applyGroup` call, not an initial snapshot. Promoting publishes
+    // that empty state as the one `isInit` update and makes the generation
+    // live, so `applyGroup` below delivers through the production path.
+    const promoted = await this.deltaSource.promoteWith(
+      this.generationId,
+      (changes) => callbacks.update(changes, true),
+    );
+    if (!promoted) {
+      throw new HarnessError(
+        "RevisionDeltaReferenceSource: initial promotion was dropped as a late generation",
+      );
+    }
   }
 
   unsubscribe(_instance: string): void {
@@ -118,7 +135,8 @@ export class RevisionDeltaReferenceSource implements ExternalService {
    * applied (or ignored as a replay).
    */
   async applyGroup(group: RevisionGroup): Promise<{ replayedIgnored: number }> {
-    if (this.subscriber === undefined) {
+    const subscriber = this.subscriber;
+    if (subscriber === undefined) {
       throw new HarnessError(
         "RevisionDeltaReferenceSource: applyGroup called before subscribe",
       );
@@ -130,52 +148,32 @@ export class RevisionDeltaReferenceSource implements ExternalService {
         "RevisionDeltaReferenceSource: stale generation (beginPage refused)",
       );
     }
-    let ignored = 0;
-    const changes: Entry<Json, Json>[] = [];
-    for (const row of group.rows) {
-      const entry: RevisionDeltaEntry<Json> = {
-        ts: String(group.ts),
-        deleted: false,
-        component: SOURCE_COMPONENT,
-        table: row.table,
-        _id: row._id,
-        _creationTime: row._creationTime,
-        doc: row.doc,
-      };
-      const result = this.deltaSource.applyEntry(this.generationId, entry);
-      if (result.status === "replay-ignored") {
-        ignored += 1;
-        continue;
-      }
-      if (result.status === "late-generation-dropped") {
-        throw new HarnessError(
-          `RevisionDeltaReferenceSource: entry for "${row.table}/${row._id}" dropped as a late generation`,
-        );
-      }
-      // `RevisionDeltaApplier.apply`'s returned `change` value is the
-      // bare doc (`[key, [doc]]`) -- that's the P2 shape 1c's own
-      // data-sync consumer wants, but `SplitByTable` (split.ts) needs
-      // the full envelope (`ts`/`deleted`/`component`/`table`/`_id`/
-      // `_creationTime`/`doc`) as the published value to route by
-      // table via its `isRevisionEnvelope` discrimination. Publish
-      // `entry` itself (structurally a `RevisionEnvelope`), keyed by
-      // the applier's own retention key, not `result.change`'s bare
-      // doc.
-      changes.push([result.change[0], [entry]] as Entry<Json, Json>);
-    }
-    const marked = this.deltaSource.markGroupComplete(
+    const entries: RevisionDeltaEntry<Json>[] = group.rows.map((row) => ({
+      ts: String(group.ts),
+      deleted: false,
+      component: SOURCE_COMPONENT,
+      table: row.table,
+      _id: row._id,
+      _creationTime: row._creationTime,
+      doc: row.doc,
+    }));
+    // One atomic push: the live applyGroup hands every changed key to
+    // `update()` in a single call, then commits the watermarks and snapshot
+    // only after Skip accepted it.
+    const result = await this.deltaSource.applyGroup(
       this.generationId,
       ledger,
       groupId,
+      entries,
+      (changes) => subscriber.update(changes, false),
     );
-    if (!marked) {
+    if (result.status === "late-generation-dropped") {
       throw new HarnessError(
         `RevisionDeltaReferenceSource: group "${groupId}" was dropped as a late generation`,
       );
     }
-    if (changes.length > 0) await this.subscriber.update(changes, false);
     this.checkpointEmitter.checkpoint(group.ts);
-    return { replayedIgnored: ignored };
+    return { replayedIgnored: result.replayIgnored };
   }
 
   /** F2's replay-idempotency counter (`RevisionDeltaApplier.replayedIgnored`), scoped to this source's one live generation. */

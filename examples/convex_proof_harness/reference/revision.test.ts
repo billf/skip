@@ -3,10 +3,11 @@
  * `SplitByTable` mapper (the same one `service.ts`'s `createReferenceService`
  * wires into the graph), without a Skip runtime. Exists because a live
  * `npm run reference:revision` run once failed with `unknown table
- * "undefined"`: `RevisionDeltaSource.applyEntry`'s returned `change` is the
- * bare doc (`[key, [doc]]`), not the `RevisionEnvelope` shape `SplitByTable`
- * needs to route by table -- a shape mismatch `Entry<Json, Json>`'s width
- * hid from `tsc`. This test would have caught it without a live deployment.
+ * "undefined"`: the source published bare docs (`[key, [doc]]`), not the
+ * `RevisionEnvelope` shape `SplitByTable` needs to route by table -- a
+ * mismatch `Entry<Json, Json>`'s width hid from `tsc`. The source now runs the
+ * production path (`promoteWith` + `applyGroup`), whose payload is already
+ * the envelope, and this test pins that with no cast.
  * docs/plans/2026-09-11-1159-feat-skip-shared-prerequisites-plan.md, U15.
  */
 
@@ -16,6 +17,7 @@ import type { Context, Json, Values } from "@skipruntime/core";
 import { deepFreeze } from "@skipruntime/core";
 import {
   SplitByTable,
+  isRevisionEnvelope,
   type TaggedRow,
   type RevisionEnvelope,
 } from "@skip-adapter/atomic-batch";
@@ -88,10 +90,17 @@ test("applyGroup's published entries route through SplitByTable without error, o
   const split = new SplitByTable(SOURCE_COMPONENT, KNOWN_TABLES);
   const routed = new Map<string, Json>();
   for (const [key, values] of updates) {
-    const envelopeValues = values as unknown as (
-      | TaggedRow
-      | RevisionEnvelope
-    )[];
+    const envelopeValues: (TaggedRow | RevisionEnvelope)[] = values.filter(
+      (value): value is RevisionEnvelope =>
+        typeof value === "object" &&
+        value !== null &&
+        isRevisionEnvelope(value),
+    );
+    assert.equal(
+      envelopeValues.length,
+      values.length,
+      "every published value is a RevisionEnvelope, not a bare doc",
+    );
     for (const [outKey, doc] of split.mapEntry(
       key as string,
       fakeValues(envelopeValues),
