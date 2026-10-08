@@ -86,7 +86,7 @@ export function computeSemanticHash(corpus: Corpus): string {
 export const EXPECTED_SEMANTIC_HASH =
   "a173a25aa48ae62eb5780d7b85c6f38b4ed3ab3950ac2349b90e48dabc07f4e8";
 
-export class CorpusSemanticHashError extends Error {
+export class CorpusSemanticHashError extends HarnessError {
   constructor(actual: string, expected: string) {
     super(
       `Vendored corpus semantic hash mismatch: expected ${expected}, got ${actual}. ` +
