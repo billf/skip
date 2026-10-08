@@ -92,6 +92,9 @@ test("CorpusSemanticHashError names both hashes", () => {
   const error = new CorpusSemanticHashError("actual-hash", "expected-hash");
   assert.match(error.message, /actual-hash/);
   assert.match(error.message, /expected-hash/);
+  // Drift is a harness failure: a caller catching HarnessError must see it, under its own name.
+  assert.ok(error instanceof HarnessError);
+  assert.equal(error.name, "CorpusSemanticHashError");
 });
 
 test("resolveExpectedRow throws on an unbound label", () => {
