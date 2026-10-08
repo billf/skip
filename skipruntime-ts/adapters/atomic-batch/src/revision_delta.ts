@@ -33,6 +33,10 @@ export type RevisionDeltaEntry<Doc extends Json> = {
 /** Converts a revision timestamp to `BigInt`, rejecting malformed input with a clear `Error` (never a raw `SyntaxError`). */
 function toBigInt(ts: string | bigint, context: string): bigint {
 	if (typeof ts === "bigint") return ts;
+	// `BigInt` alone would accept "", whitespace-padded, hex, and signed strings (as 0, 12, 16, ...).
+	if (!/^[0-9]+$/.test(ts)) {
+		throw new Error(`invalid revision timestamp ${context}: ${JSON.stringify(ts)} (expected a decimal integer string or bigint)`);
+	}
 	try {
 		return BigInt(ts);
 	} catch {
@@ -168,7 +172,12 @@ export class RevisionDeltaApplier<Doc extends Json> {
 
 	/** Applies a batch `prepare` resolved: retains its revisions and counts its replays. */
 	commit(prepared: PreparedRevisions<Doc>): void {
-		for (const [key, revision] of prepared.retain) this.retained.set(key, revision);
+		for (const [key, revision] of prepared.retain) {
+			// `prepare` saw the retained ts at the time it ran; a batch that was prepared before another committed
+			// must not regress a newer revision (callers serialize, this is the backstop).
+			const current = this.retained.get(key);
+			if (current === undefined || compareTs(revision.ts, current.ts) > 0) this.retained.set(key, revision);
+		}
 		this.replayedIgnoredCount += prepared.ignored;
 	}
 
@@ -254,6 +263,27 @@ export type Publish<Doc extends Json> = (changes: Entry<string, Doc>[]) => Promi
 export class RevisionDeltaSource<Doc extends Json> {
 	private readonly generations = new GenerationManager<string, Doc>();
 	private readonly appliers = new Map<GenerationId, RevisionDeltaApplier<Doc>>();
+	/** Settles when the in-flight `applyGroup`/`promoteWith` call (and anything queued behind it) has finished. */
+	private tail: Promise<void> | undefined;
+
+	/**
+	 * Runs `task` after every earlier `applyGroup`/`promoteWith` call has settled (immediately when none is in
+	 * flight). Both await a caller-supplied `publish` between preparing and committing, so overlapping calls would
+	 * prepare against the same pre-commit watermarks and could commit out of order; callers need not serialize.
+	 * A rejected call does not block the ones behind it.
+	 */
+	private serialized<T>(task: () => Promise<T>): Promise<T> {
+		const run = this.tail === undefined ? task() : this.tail.then(task);
+		const settled = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.tail = settled;
+		void settled.then(() => {
+			if (this.tail === settled) this.tail = undefined;
+		});
+		return run;
+	}
 
 	/** Begins a new generation (cold build or resnapshot), discarding any prior staging generation wholesale. */
 	beginGeneration(): GenerationId {
@@ -338,7 +368,17 @@ export class RevisionDeltaSource<Doc extends Json> {
 	 * and the ledger change only after it resolves. If `publish` rejects, nothing is committed and the error is
 	 * rethrown, so the same group applies again on retry. `publish` is called only when the group has changes.
 	 */
-	async applyGroup(
+	applyGroup(
+		id: GenerationId,
+		ledger: PendingPageLedger,
+		groupId: string,
+		entries: readonly RevisionDeltaEntry<Doc>[],
+		publish?: Publish<Doc>,
+	): Promise<ApplyGroupResult<Doc>> {
+		return this.serialized(() => this.applyGroupNow(id, ledger, groupId, entries, publish));
+	}
+
+	private async applyGroupNow(
 		id: GenerationId,
 		ledger: PendingPageLedger,
 		groupId: string,
@@ -402,9 +442,15 @@ export class RevisionDeltaSource<Doc extends Json> {
 	/**
 	 * Publishes generation `id`'s whole candidate in one `publish` call (one Skip `isInit` update), then promotes it.
 	 * If `publish` rejects, nothing changes and a retry works. Re-promoting the already-live generation is
-	 * idempotent and publishes nothing. Throws, before publishing, if a page ledger is still incomplete.
+	 * idempotent and publishes nothing. Throws, before publishing, if a page ledger is still incomplete. Calls are
+	 * serialized with `applyGroup`; the synchronous `applyEntry` is not, so do not call it on `id` while a
+	 * `promoteWith` publish is in flight (the entry would reach staging but not the snapshot Skip received).
 	 */
-	async promoteWith(id: GenerationId, publish: Publish<Doc>): Promise<boolean> {
+	promoteWith(id: GenerationId, publish: Publish<Doc>): Promise<boolean> {
+		return this.serialized(() => this.promoteWithNow(id, publish));
+	}
+
+	private async promoteWithNow(id: GenerationId, publish: Publish<Doc>): Promise<boolean> {
 		const staging = this.generations.stagingFor(id);
 		if (staging === undefined) return false;
 		if (staging.isPromoted) return true;

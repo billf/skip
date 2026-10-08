@@ -555,3 +555,95 @@ test("a cold generation can truncate its own staged rows", async () => {
 	const result = await source.applyGroup(gen, again, "g10b", [entry({ ts: "10" })]);
 	assert.equal(result.status === "applied" && result.replayIgnored, 0);
 });
+
+test("timestamps must be decimal digit strings or bigint; empty, padded, hex, signed, and fractional strings are rejected", () => {
+	for (const bad of ["", " 1", "1 ", "0x1", "-1", "+1", "1.5", "1e3"]) {
+		assert.throws(() => compareTs(bad, "1"), /invalid revision timestamp/, `compareTs(${JSON.stringify(bad)}, "1") must throw`);
+		assert.throws(() => compareTs("1", bad), /invalid revision timestamp/, `compareTs("1", ${JSON.stringify(bad)}) must throw`);
+	}
+	assert.equal(compareTs("007", 7n), 0, "leading zeros are still a decimal integer");
+	const applier = new RevisionDeltaApplier<Doc>();
+	assert.throws(() => applier.apply(entry({ ts: "" })), /invalid revision timestamp/);
+	assert.throws(() => applier.apply(entry({ ts: "0x10" })), /invalid revision timestamp/);
+});
+
+test("live CDC: overlapping applyGroup calls are serialized, so a held-open older publish cannot regress a newer commit", async () => {
+	const { source, gen } = liveSource();
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => (release = resolve));
+	const published: string[] = [];
+
+	const first = source.applyGroup(gen, source.beginPage(gen, ["g20"])!, "g20", [entry({ ts: "20", doc: { body: "v20" } })], async (changes) => {
+		published.push("v20");
+		void changes;
+		await gate;
+	});
+	const second = source.applyGroup(gen, source.beginPage(gen, ["g30"])!, "g30", [entry({ ts: "30", doc: { body: "v30" } })], async () => {
+		published.push("v30");
+	});
+	await Promise.resolve();
+	assert.deepEqual(published, ["v20"], "the second group waits for the first to settle");
+
+	release();
+	assert.equal((await first).status, "applied");
+	assert.equal((await second).status, "applied");
+	assert.deepEqual(published, ["v20", "v30"]);
+	assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "v30" }], "the newer group wins");
+
+	const replay = await source.applyGroup(gen, source.beginPage(gen, ["g30"])!, "g30", [entry({ ts: "30", doc: { body: "v30" } })], async () => {
+		published.push("replay");
+	});
+	assert.equal(replay.status, "applied");
+	assert.equal(replay.status === "applied" ? replay.replayIgnored : -1, 1, "the committed ts is retained, so a replay is ignored");
+	assert.deepEqual(published, ["v20", "v30"], "an ignored replay publishes nothing");
+});
+
+test("live CDC: a rejected publish does not block the group queued behind it", async () => {
+	const { source, gen } = liveSource();
+	const failing = source.applyGroup(gen, source.beginPage(gen, ["g20"])!, "g20", [entry({ ts: "20" })], async () => {
+		throw new Error("skip rejected the update");
+	});
+	const { batches, publish } = recorder();
+	const next = source.applyGroup(gen, source.beginPage(gen, ["g30"])!, "g30", [entry({ ts: "30", doc: { body: "v30" } })], publish);
+	await assert.rejects(failing, /skip rejected/);
+	assert.equal((await next).status, "applied");
+	assert.equal(batches.length, 1);
+});
+
+test("promoteWith rejects an incomplete page ledger before publishing anything", async () => {
+	const source = new RevisionDeltaSource<Doc>();
+	const gen = source.beginGeneration();
+	const ledger = source.beginPage(gen, ["g10", "g11"])!;
+	await source.applyGroup(gen, ledger, "g10", [entry({ ts: "10" })]);
+	const { batches, publish } = recorder();
+	await assert.rejects(source.promoteWith(gen, publish), /incomplete/);
+	assert.equal(batches.length, 0, "nothing reached Skip");
+	assert.equal(source.isLive(gen), false);
+});
+
+test("a generation superseded while its publish is in flight is dropped and counted, for applyGroup and promoteWith", async () => {
+	// applyGroup on the live generation, superseded by a replacement during publish.
+	{
+		const { source, gen } = liveSource();
+		const before = source.lateEventDropCount;
+		const result = await source.applyGroup(gen, source.beginPage(gen, ["g20"])!, "g20", [entry({ ts: "20", doc: { body: "late" } })], async () => {
+			source.beginReplacement([MESSAGES]);
+		});
+		assert.equal(result.status, "late-generation-dropped");
+		assert.equal(source.lateEventDropCount, before + 1);
+		assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }], "the superseded group never reaches the live snapshot");
+	}
+	// promoteWith on a cold build, superseded by a fresh generation during publish.
+	{
+		const source = new RevisionDeltaSource<Doc>();
+		const gen = source.beginGeneration();
+		await source.applyGroup(gen, source.beginPage(gen, ["g10"])!, "g10", [entry({ ts: "10" })]);
+		const before = source.lateEventDropCount;
+		const promoted = await source.promoteWith(gen, async () => {
+			source.beginGeneration();
+		});
+		assert.equal(promoted, false);
+		assert.equal(source.lateEventDropCount, before + 1);
+		assert.equal(source.isLive(gen), false);
+	}
+});
