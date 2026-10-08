@@ -7,7 +7,7 @@
  * Q6 (extension), Q7.
  */
 
-import type { FaultInjector } from "./injector.js";
+import type { FaultInjector, FaultTrigger } from "./injector.js";
 
 /**
  * Data Sync's soft limits (PROVISIONAL — claimed from research, not yet
@@ -29,22 +29,22 @@ export function exceedsDataSyncSoftLimits(txn: { entries: number; bytes: number;
 }
 
 /** Cursor expired: the retained cursor is too old to resume from; forces a resnapshot, keeping the last good result frozen. */
-export function cursorExpiredFault(trigger: () => void | Promise<void>): FaultInjector {
+export function cursorExpiredFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "cursor-expired", counterName: "cursorExpired", expectedState: "frozen", trigger };
 }
 
 /** Cursor invalid: the retained cursor no longer names a valid position; forces a resnapshot, last good stays frozen. */
-export function cursorInvalidFault(trigger: () => void | Promise<void>): FaultInjector {
+export function cursorInvalidFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "cursor-invalid", counterName: "cursorInvalid", expectedState: "frozen", trigger };
 }
 
 /** Cursor ahead: the retained cursor is ahead of the source's own log; forces a resnapshot, last good stays frozen. */
-export function cursorAheadFault(trigger: () => void | Promise<void>): FaultInjector {
+export function cursorAheadFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "cursor-ahead", counterName: "cursorAhead", expectedState: "frozen", trigger };
 }
 
 /** Table replacement, returning to snapshotting: the last good result stays frozen (Replacing-keeps-last-good) until the new candidate promotes. */
-export function tableReplacementFault(trigger: () => void | Promise<void>): FaultInjector {
+export function tableReplacementFault(trigger: FaultTrigger): FaultInjector {
 	return {
 		name: "table-replacement-return-to-snapshotting",
 		counterName: "tableReplacement",
@@ -54,7 +54,7 @@ export function tableReplacementFault(trigger: () => void | Promise<void>): Faul
 }
 
 /** An oversized transaction past Data Sync's soft limits: handled like any other forced resnapshot, last good stays frozen. */
-export function oversizedTransactionFault(trigger: () => void | Promise<void>): FaultInjector {
+export function oversizedTransactionFault(trigger: FaultTrigger): FaultInjector {
 	return { name: "oversized-transaction", counterName: "oversizedTransaction", expectedState: "frozen", trigger };
 }
 
@@ -65,7 +65,7 @@ export function oversizedTransactionFault(trigger: () => void | Promise<void>): 
  * (`not-yet-loaded`), never publishing a blank result as if it were
  * current.
  */
-export function restartMidCdcFault(trigger: () => void | Promise<void>, hasRetainedState: boolean): FaultInjector {
+export function restartMidCdcFault(trigger: FaultTrigger, hasRetainedState: boolean): FaultInjector {
 	return {
 		name: "restart-mid-cdc",
 		counterName: "restartMidCdc",

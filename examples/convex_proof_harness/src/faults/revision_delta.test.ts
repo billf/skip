@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FaultHarness } from "./injector.js";
+import { FaultHarness, type FaultTrigger } from "./injector.js";
 import {
 	DATA_SYNC_SOFT_LIMITS,
 	cursorAheadFault,
@@ -32,25 +32,42 @@ const EXPECTED_STATES = {
 test("each injector against the scripted mock reaches its expected publication state and counter", async () => {
 	const harness = new FaultHarness();
 	const cases = [
-		{ injector: cursorExpiredFault(mockTrigger().trigger), name: "cursor-expired" },
-		{ injector: cursorInvalidFault(mockTrigger().trigger), name: "cursor-invalid" },
-		{ injector: cursorAheadFault(mockTrigger().trigger), name: "cursor-ahead" },
-		{ injector: tableReplacementFault(mockTrigger().trigger), name: "table-replacement" },
-		{ injector: oversizedTransactionFault(mockTrigger().trigger), name: "oversized-transaction" },
-		{ injector: restartMidCdcFault(mockTrigger().trigger, true), name: "restart-mid-cdc" },
+		{ build: cursorExpiredFault, name: "cursor-expired" },
+		{ build: cursorInvalidFault, name: "cursor-invalid" },
+		{ build: cursorAheadFault, name: "cursor-ahead" },
+		{ build: tableReplacementFault, name: "table-replacement" },
+		{ build: oversizedTransactionFault, name: "oversized-transaction" },
+		{ build: (trigger: FaultTrigger) => restartMidCdcFault(trigger, true), name: "restart-mid-cdc" },
 	] as const;
-	for (const { injector, name } of cases) {
+	const counterNames = new Set<string>();
+	for (const { build, name } of cases) {
 		const expected = EXPECTED_STATES[name];
-		assert.equal(injector.expectedState, expected, `${name} factory states ${expected}`);
+		// The factory's own trigger is the one under test: a factory that
+		// dropped or replaced it would never bump this count.
 		const calls: number[] = [];
-		const probed = { ...injector, trigger: () => void calls.push(1) };
-		await harness.run(probed, () => expected);
+		const injector = build(() => void calls.push(1));
+		assert.equal(injector.expectedState, expected, `${name} factory states ${expected}`);
+		await harness.run(injector, () => expected);
 		assert.equal(calls.length, 1, `${name} trigger was actually invoked`);
-		harness.assertCount(probed, 1);
+		harness.assertCount(injector, 1);
+		counterNames.add(injector.counterName);
 	}
-
-	const counterNames = new Set(cases.map((c) => c.injector.counterName));
 	assert.equal(counterNames.size, cases.length, "each injector has its own counter");
+});
+
+test("a CDC fault whose trigger injects nothing fails closed without counting", async () => {
+	const harness = new FaultHarness();
+	for (const injector of [
+		cursorExpiredFault(() => false),
+		cursorInvalidFault(() => false),
+		cursorAheadFault(() => false),
+		tableReplacementFault(() => false),
+		oversizedTransactionFault(() => false),
+		restartMidCdcFault(() => false, true),
+	]) {
+		await assert.rejects(harness.run(injector, () => injector.expectedState), `${injector.name} no-op trigger must reject`);
+		harness.assertCount(injector, 0);
+	}
 });
 
 test("a restart with no retained state starts cold", async () => {

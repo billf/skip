@@ -20,6 +20,24 @@ test("identical feeds match", () => {
 	assert.deepEqual(compareFeeds("V-test", feed, feed), []);
 });
 
+test("each compared field, mutated alone, yields exactly one mismatch naming that field", () => {
+	const mutations: [string, Partial<FeedRow>][] = [
+		["_id", { _id: "other" }],
+		["_creationTime", { _creationTime: 11 }],
+		["room", { room: "r2" }],
+		["body", { body: "bye" }],
+		["likeCount", { likeCount: 1 }],
+		["sender", { sender: { _id: "u2", name: "Ada" } }],
+		["sender", { sender: { _id: "u1", name: "Bea" } }],
+		["sender", { sender: null }],
+	];
+	for (const [field, over] of mutations) {
+		const mismatches = compareFeeds("V-test", [row()], [row(over)]);
+		assert.equal(mismatches.length, 1, `mutating ${field} (${JSON.stringify(over)}) should yield one mismatch`);
+		assert.equal(mismatches[0]!.field, field);
+	}
+});
+
 test("a duplicated _id on either side surfaces as a duplicate-id mismatch", () => {
 	const dupExpected = [row(), row()];
 	assert.ok(

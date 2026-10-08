@@ -71,10 +71,17 @@ test("1a's correctness-only profile accepts only the mismatch count", () => {
 	// Everything else is not-applicable for 1a.
 	for (const entry of CATALOG) {
 		if (entry.name === "mismatch") continue;
+		// Carry the required `mismatch` sample so only the not-applicable
+		// guard can reject; otherwise the missing-required guard throws first
+		// and this loop passes with the guard removed.
 		assert.throws(
-			() => recorder.record("1a", 1, { kind: "current" }, [{ name: entry.name, value: 1 }]),
-			HarnessError,
-			`expected "${entry.name}" to be rejected for direction 1a`,
+			() =>
+				recorder.record("1a", 1, { kind: "current" }, [
+					{ name: "mismatch", value: 0 },
+					{ name: entry.name, value: 1 },
+				]),
+			(err: unknown) => err instanceof HarnessError && /not-applicable/.test(err.message) && err.message.includes(entry.name),
+			`expected "${entry.name}" to be rejected as not-applicable for direction 1a`,
 		);
 	}
 });
