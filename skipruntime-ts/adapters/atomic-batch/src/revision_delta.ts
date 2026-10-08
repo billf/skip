@@ -9,7 +9,16 @@
  * P4, P5, P9.
  */
 
-import type { Entry, Json } from "@skipruntime/core";
+import type { Json } from "@skipruntime/core";
+import {
+  compareTs,
+  toBigInt,
+  toEnvelope,
+  type RevisionChange,
+  type RevisionDeltaEntry,
+  type RevisionEnvelope,
+  type RevisionTs,
+} from "./envelope.js";
 import {
   GenerationManager,
   PendingPageLedger,
@@ -17,54 +26,10 @@ import {
 } from "./generation.js";
 
 export type { GenerationId, PendingPageLedger } from "./generation.js";
+export { compareTs, type RevisionDeltaEntry, type RevisionTs };
 
-/**
- * One revision-delta envelope (the input shape; `RevisionEnvelope` in split.ts is the same wire shape with a
- * different `ts`/`doc` typing, pending the decision recorded in SPEC.md). `ts` is carried as a string or `bigint`
- * (never a plain `number`) because Convex/Data-Sync timestamps routinely
- * exceed `2^53`, where `number` silently loses precision; `doc` is `null`
- * for a tombstone (`deleted: true`).
- */
-export type RevisionDeltaEntry<Doc extends Json> = {
-  readonly ts: string | bigint;
-  readonly deleted: boolean;
-  readonly component: string;
-  readonly table: string;
-  readonly _id: string;
-  readonly _creationTime: number;
-  readonly doc: Doc | null;
-};
-
-/** Converts a revision timestamp to `BigInt`, rejecting malformed input with a clear `Error` (never a raw `SyntaxError`). */
-function toBigInt(ts: string | bigint, context: string): bigint {
-  if (typeof ts === "bigint") return ts;
-  // `BigInt` alone would accept "", whitespace-padded, hex, and signed strings (as 0, 12, 16, ...).
-  if (!/^[0-9]+$/.test(ts)) {
-    throw new Error(
-      `invalid revision timestamp ${context}: ${JSON.stringify(ts)} (expected a decimal integer string or bigint)`,
-    );
-  }
-  try {
-    return BigInt(ts);
-  } catch {
-    throw new Error(
-      `invalid revision timestamp ${context}: ${JSON.stringify(ts)} (expected a decimal integer string or bigint)`,
-    );
-  }
-}
-
-/** Compares two revision timestamps exactly, regardless of magnitude (both convert through `BigInt`). Throws an `Error` on malformed input. */
-export function compareTs(a: string | bigint, b: string | bigint): number {
-  const ai = toBigInt(a, "in compareTs(a)");
-  const bi = toBigInt(b, "in compareTs(b)");
-  return ai < bi ? -1 : ai > bi ? 1 : 0;
-}
-
-type RetainedRevision<Doc extends Json> = {
-  readonly ts: string | bigint;
-  readonly deleted: boolean;
-  readonly doc: Doc | null;
-};
+/** What an applier retains per key: the last published envelope (a tombstone is retained until swept). */
+type RetainedRevision<Doc extends Json> = RevisionEnvelope<Doc>;
 
 /** One table, as named in a Data Sync truncate. */
 export type TableRef = { readonly component: string; readonly table: string };
@@ -97,7 +62,7 @@ export function revisionKey(ref: {
  */
 export type PreparedRevisions<Doc extends Json> = {
   /** One change per touched key, in first-touched order; an empty array is a tombstone. */
-  readonly changes: Entry<string, Doc>[];
+  readonly changes: RevisionChange<Doc>[];
   /** Entries ignored as replays at or under a retained ts or swept watermark. */
   readonly ignored: number;
   readonly retain: ReadonlyMap<string, RetainedRevision<Doc>>;
@@ -123,24 +88,24 @@ export type PreparedRevisions<Doc extends Json> = {
  */
 export class RevisionDeltaApplier<Doc extends Json> {
   private readonly retained = new Map<string, RetainedRevision<Doc>>();
-  private readonly watermarks = new Map<string, string | bigint>();
+  private readonly watermarks = new Map<string, string>();
   private replayedIgnoredCount = 0;
 
   /**
    * Applies `entry` iff its `ts` is strictly greater than the retained
    * `ts` for its `(component, table, _id)` key -- never Skip's own
    * subscription/session-tick watermark (P4). Returns the resulting
-   * `[key, values[]]` entry (P2's shape; an empty array is a tombstone,
-   * derived from the retained value, never resurrectable by an
-   * out-of-order replay) or `undefined` if the entry was a replay and was
-   * ignored.
+   * `[key, envelopes[]]` entry (one `RevisionEnvelope` per upsert; an empty
+   * array is a tombstone, derived from the retained value, never
+   * resurrectable by an out-of-order replay) or `undefined` if the entry
+   * was a replay and was ignored.
    *
    * Rejects invalid envelopes before retaining anything: `deleted: false`
    * requires a non-null `doc`, and `deleted: true` requires `doc: null`.
    * Malformed `ts` values throw an `Error` carrying the entry's key, not
    * a raw `SyntaxError`.
    */
-  apply(entry: RevisionDeltaEntry<Doc>): Entry<string, Doc> | undefined {
+  apply(entry: RevisionDeltaEntry<Doc>): RevisionChange<Doc> | undefined {
     const prepared = this.prepare([entry]);
     this.commit(prepared);
     return prepared.changes[0];
@@ -156,11 +121,12 @@ export class RevisionDeltaApplier<Doc extends Json> {
    */
   prepare(entries: readonly RevisionDeltaEntry<Doc>[]): PreparedRevisions<Doc> {
     const retain = new Map<string, RetainedRevision<Doc>>();
-    const changes = new Map<string, Doc[]>();
+    const changes = new Map<string, RevisionEnvelope<Doc>[]>();
     let ignored = 0;
     for (const entry of entries) {
       const key = revisionKey(entry);
       const where = `for key "${key}" (table "${entry.table}", _id "${entry._id}")`;
+      // The union type forbids these combinations for typed callers; untyped input is still rejected here.
       if (!entry.deleted && entry.doc === null) {
         throw new Error(
           `invalid RevisionDeltaEntry ${where}: deleted:false requires a non-null doc`,
@@ -171,24 +137,24 @@ export class RevisionDeltaApplier<Doc extends Json> {
           `invalid RevisionDeltaEntry ${where}: deleted:true requires doc:null`,
         );
       }
-      // Validate the incoming ts before any comparison, counting, or
+      // Validate and canonicalize the incoming ts before any comparison, counting, or
       // retaining, so a malformed ts throws an `Error` with entry
       // context instead of a raw `SyntaxError` from `BigInt()`.
       // (Retained and watermark timestamps were validated when written,
       // so only the incoming ts can fail here.)
-      toBigInt(entry.ts, where);
+      const envelope = toEnvelope(entry, where);
       const prior = retain.get(key) ?? this.retained.get(key);
-      if (prior !== undefined && compareTs(entry.ts, prior.ts) <= 0) {
+      if (prior !== undefined && compareTs(envelope.ts, prior.ts) <= 0) {
         ignored += 1;
         continue;
       }
       const watermark = this.watermarks.get(key);
-      if (watermark !== undefined && compareTs(entry.ts, watermark) <= 0) {
+      if (watermark !== undefined && compareTs(envelope.ts, watermark) <= 0) {
         ignored += 1;
         continue;
       }
-      retain.set(key, { ts: entry.ts, deleted: entry.deleted, doc: entry.doc });
-      changes.set(key, entry.deleted ? [] : [entry.doc as Doc]);
+      retain.set(key, envelope);
+      changes.set(key, envelope.deleted ? [] : [envelope]);
     }
     return { changes: [...changes], ignored, retain };
   }
@@ -216,7 +182,7 @@ export class RevisionDeltaApplier<Doc extends Json> {
    * still ignored as stale and can never resurrect the row. A malformed
    * `horizonTs` throws an `Error`, never a raw `SyntaxError`.
    */
-  sweepTombstones(horizonTs: string | bigint): void {
+  sweepTombstones(horizonTs: RevisionTs): void {
     toBigInt(horizonTs, "as sweepTombstones horizonTs");
     for (const [key, revision] of this.retained) {
       if (revision.deleted && compareTs(revision.ts, horizonTs) <= 0) {
@@ -257,14 +223,14 @@ export class RevisionDeltaApplier<Doc extends Json> {
 }
 
 export type ApplyResult<Doc extends Json> =
-  | { readonly status: "applied"; readonly change: Entry<string, Doc> }
+  | { readonly status: "applied"; readonly change: RevisionChange<Doc> }
   | { readonly status: "replay-ignored" }
   | { readonly status: "late-generation-dropped" };
 
 export type ApplyGroupResult<Doc extends Json> =
   | {
       readonly status: "applied";
-      readonly changes: Entry<string, Doc>[];
+      readonly changes: RevisionChange<Doc>[];
       readonly replayIgnored: number;
     }
   | { readonly status: "late-generation-dropped" };
@@ -272,11 +238,12 @@ export type ApplyGroupResult<Doc extends Json> =
 /**
  * Hands Skip one atomic update; resolves once Skip accepted it.
  *
- * The values are the bare docs (`[key, [doc]]`; a tombstone is `[key, []]`), not `RevisionEnvelope`s, so this payload
- * is not `SplitByTable` input. See "Open decision: the revision envelope on the live path" in SPEC.md.
+ * The changes are `[key, envelopes[]]`: an upsert publishes its `RevisionEnvelope` and a tombstone publishes `[]`
+ * (a real Skip delete). This is exactly what `SplitByTable` reads, so the callback can write the changes to a
+ * collection that feeds it with no reshaping.
  */
 export type Publish<Doc extends Json> = (
-  changes: Entry<string, Doc>[],
+  changes: RevisionChange<Doc>[],
 ) => Promise<void>;
 
 /**
@@ -299,7 +266,10 @@ export type Publish<Doc extends Json> = (
  * `replayedIgnored`, `currentSnapshot`) never count.
  */
 export class RevisionDeltaSource<Doc extends Json> {
-  private readonly generations = new GenerationManager<string, Doc>();
+  private readonly generations = new GenerationManager<
+    string,
+    RevisionEnvelope<Doc>
+  >();
   private readonly appliers = new Map<
     GenerationId,
     RevisionDeltaApplier<Doc>
@@ -495,7 +465,7 @@ export class RevisionDeltaSource<Doc extends Json> {
    * Every non-empty row of generation `id`: the candidate before promotion, the live snapshot after.
    * `undefined` if `id` is not the write target (query-only; never counted).
    */
-  stateEntries(id: GenerationId): Entry<string, Doc>[] | undefined {
+  stateEntries(id: GenerationId): RevisionChange<Doc>[] | undefined {
     if (!this.isCurrentGeneration(id)) return undefined;
     if (this.isLive(id))
       return [...this.currentSnapshot].map(([key, values]) => [
@@ -504,7 +474,7 @@ export class RevisionDeltaSource<Doc extends Json> {
       ]);
     const staging = this.generations.stagingFor(id);
     if (staging === undefined) return undefined;
-    const rows: Entry<string, Doc>[] = [];
+    const rows: RevisionChange<Doc>[] = [];
     for (const [key, values] of staging.entries()) {
       if (values.length > 0) rows.push([key, [...values]]);
     }
@@ -602,7 +572,7 @@ export class RevisionDeltaSource<Doc extends Json> {
    * stale -- a query-only staleness check that is never counted as a
    * late drop.
    */
-  sweepTombstones(id: GenerationId, horizonTs: string | bigint): boolean {
+  sweepTombstones(id: GenerationId, horizonTs: RevisionTs): boolean {
     if (!this.isCurrentGeneration(id)) return false;
     const applier = this.appliers.get(id);
     if (applier === undefined) return false;
@@ -610,7 +580,7 @@ export class RevisionDeltaSource<Doc extends Json> {
     return true;
   }
 
-  get currentSnapshot(): ReadonlyMap<string, Doc[]> {
+  get currentSnapshot(): ReadonlyMap<string, RevisionEnvelope<Doc>[]> {
     return this.generations.currentSnapshot;
   }
 

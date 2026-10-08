@@ -169,7 +169,7 @@ test("a deleted revision-delta envelope produces no output row", () => {
     table: "messages",
     _id: "m1",
     _creationTime: 100,
-    doc: { _id: "m1" },
+    doc: null,
   };
   const out = [...mapper.mapEntry("m1", multiValues([envelope]), noContext)];
   assert.deepEqual(out, []);

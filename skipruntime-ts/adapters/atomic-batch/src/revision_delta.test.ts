@@ -7,10 +7,20 @@ import {
   revisionKey,
   type RevisionDeltaEntry,
 } from "./revision_delta.js";
+import { envelopeDoc, toEnvelope, type RevisionEnvelope } from "./envelope.js";
 
-function entry(
-  over: Partial<RevisionDeltaEntry<{ body: string }>> = {},
-): RevisionDeltaEntry<{ body: string }> {
+type Doc = { body: string };
+
+/** Loose overrides: tests may deliberately build an invalid (`deleted`, `doc`) pair, which the types forbid. */
+type EntryOverrides = Partial<
+  Omit<RevisionDeltaEntry<Doc>, "deleted" | "doc"> & {
+    deleted: boolean;
+    doc: Doc | null;
+  }
+>;
+
+/** A valid entry by default; `over` may build an invalid combination, so the result is cast. */
+function entry(over: EntryOverrides = {}): RevisionDeltaEntry<Doc> {
   return {
     ts: "10",
     deleted: false,
@@ -20,7 +30,20 @@ function entry(
     _creationTime: 1,
     doc: { body: "hi" },
     ...over,
-  };
+  } as RevisionDeltaEntry<Doc>;
+}
+
+/** The documents the live snapshot holds at `key` (`Envelope<T> -> T`), so a test can assert content without restating envelopes. */
+function docsAt(
+  source: RevisionDeltaSource<Doc>,
+  key: string,
+): (Doc | null)[] | undefined {
+  return source.currentSnapshot.get(key)?.map(envelopeDoc);
+}
+
+/** The envelope the source publishes for `entry(over)`: the same fields with `ts` canonicalized to a string. */
+function envelope(over: EntryOverrides = {}): RevisionEnvelope<Doc> {
+  return toEnvelope(entry(over));
 }
 
 test("timestamps above 2^53 stay distinct and ordered", () => {
@@ -235,7 +258,7 @@ test("applyEntry on a promoted generation throws without advancing its watermark
   // published.
   assert.throws(() => source.applyEntry(gen, newer), /promoted/);
   assert.equal(source.replayedIgnored(gen), 0);
-  assert.deepEqual(source.currentSnapshot.get("chat\u0000messages\u0000m1"), [
+  assert.deepEqual(docsAt(source, "chat\u0000messages\u0000m1"), [
     { body: "hi" },
   ]);
 });
@@ -297,7 +320,6 @@ test("compareTs and the applier reject malformed timestamps with an Error carryi
 
 // --- G1: CDC applied to the promoted (live) generation ----------------------
 
-type Doc = { body: string };
 const KEY_M1 = "chat\u0000messages\u0000m1";
 
 /** A cold build of `m1` at ts 10, promoted, so the source has a live generation. */
@@ -345,14 +367,16 @@ test("live CDC: applyGroup publishes the group once and commits only after publi
   );
   // While Skip has not yet accepted the update, nothing is committed.
   await Promise.resolve();
-  assert.deepEqual(published, [[[KEY_M1, [{ body: "edited" }]]]]);
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+  assert.deepEqual(published, [
+    [[KEY_M1, [envelope({ ts: "20", doc: { body: "edited" } })]]],
+  ]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "hi" }]);
   assert.equal(ledger.isComplete, false);
 
   release();
   const result = await pending;
   assert.equal(result.status, "applied");
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "edited" }]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "edited" }]);
   assert.equal(ledger.isComplete, true);
 });
 
@@ -366,7 +390,7 @@ test("live CDC: a rejected publish commits nothing, so the same group applies ag
     }),
     /skip rejected/,
   );
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "hi" }]);
   assert.equal(first.isComplete, false);
 
   const { batches, publish } = recorder();
@@ -384,7 +408,7 @@ test("live CDC: a rejected publish commits nothing, so the same group applies ag
     1,
     "the retried group is applied, not ignored as a replay",
   );
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "edited" }]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "edited" }]);
 });
 
 test("live CDC: a checkpointed group replayed on the live generation is ignored without publishing", async () => {
@@ -482,7 +506,7 @@ test("live CDC: adjacent timestamps above 2^53 apply in order", async () => {
     [entry({ ts: b, doc: { body: "edit 2" } })],
     publish,
   );
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "edit 2" }]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "edit 2" }]);
   assert.equal(ledger.isComplete, true);
 });
 
@@ -513,7 +537,7 @@ test("a live group with changes but no publish callback throws instead of commit
     ]),
     /publish/,
   );
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "hi" }]);
 });
 
 test("staging applyGroup commits into the candidate, never publishes, and marks the group", async () => {
@@ -536,7 +560,9 @@ test("staging applyGroup commits into the candidate, never publishes, and marks 
   );
   assert.equal(ledger.isComplete, true);
   assert.equal(source.currentSnapshot.size, 0);
-  assert.deepEqual(source.stateEntries(gen), [[KEY_M1, [{ body: "hi" }]]]);
+  assert.deepEqual(source.stateEntries(gen), [
+    [KEY_M1, [envelope({ ts: "10" })]],
+  ]);
 });
 
 test("an empty page takes no ledger: a build with no pages promotes with an empty snapshot", () => {
@@ -641,17 +667,25 @@ async function liveTwoTables(): Promise<{
   return { source, live };
 }
 
+/** The envelopes `liveTwoTables` publishes for its like, and for a rebuilt message `m9` at ts 50. */
+const LIKE_L1 = envelope({
+  ts: "11",
+  table: "likes",
+  _id: "l1",
+  doc: { body: "like" },
+});
+const rebuilt = (body: string, ts = "50", _id = "m9") =>
+  envelope({ ts, _id, doc: { body } });
+
 test("beginReplacement clones live minus the truncated tables and leaves the published snapshot alone", async () => {
   const { source, live } = await liveTwoTables();
   const candidate = source.beginReplacement([MESSAGES]);
   assert.notEqual(candidate, live);
   assert.equal(source.candidateGeneration, candidate);
-  assert.deepEqual(source.stateEntries(candidate), [
-    [KEY_L1, [{ body: "like" }]],
-  ]);
+  assert.deepEqual(source.stateEntries(candidate), [[KEY_L1, [LIKE_L1]]]);
   // Last-good stays published, unchanged, until the candidate promotes.
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
-  assert.deepEqual(source.currentSnapshot.get(KEY_L1), [{ body: "like" }]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "hi" }]);
+  assert.deepEqual(docsAt(source, KEY_L1), [{ body: "like" }]);
   // The candidate is the single write target: the old live id is fenced.
   assert.equal(source.isLive(live), false);
   assert.equal(source.isCurrentGeneration(candidate), true);
@@ -676,8 +710,8 @@ test("a truncated table's rows re-apply at their old timestamps; untouched table
   assert.deepEqual(
     new Map(source.stateEntries(candidate)),
     new Map([
-      [KEY_M1, [{ body: "re-imported" }]],
-      [KEY_L1, [{ body: "like" }]],
+      [KEY_M1, [envelope({ ts: "10", doc: { body: "re-imported" } })]],
+      [KEY_L1, [LIKE_L1]],
     ]),
   );
 });
@@ -691,12 +725,12 @@ test("a second truncate during a rebuild clears only that table and keeps the re
   ]);
   assert.equal(source.truncate(candidate, [LIKES]), true);
   assert.deepEqual(source.stateEntries(candidate), [
-    ["chat\u0000messages\u0000m9", [{ body: "rebuilt" }]],
+    ["chat\u0000messages\u0000m9", [rebuilt("rebuilt")]],
   ]);
   // A replayed truncate of the same table is harmless.
   assert.equal(source.truncate(candidate, [LIKES]), true);
   assert.deepEqual(source.stateEntries(candidate), [
-    ["chat\u0000messages\u0000m9", [{ body: "rebuilt" }]],
+    ["chat\u0000messages\u0000m9", [rebuilt("rebuilt")]],
   ]);
 });
 
@@ -716,10 +750,10 @@ test("a second beginReplacement fences the old candidate and re-clones from live
   assert.equal(late.status, "late-generation-dropped");
   assert.deepEqual(
     source.stateEntries(second),
-    [[KEY_L1, [{ body: "like" }]]],
+    [[KEY_L1, [LIKE_L1]]],
     "cloned from live, not from the discarded candidate",
   );
-  assert.deepEqual(source.currentSnapshot.get(KEY_M1), [{ body: "hi" }]);
+  assert.deepEqual(docsAt(source, KEY_M1), [{ body: "hi" }]);
 });
 
 test("promoting a replacement publishes the clone plus rebuilt rows in one call and fences the old live generation", async () => {
@@ -733,10 +767,10 @@ test("promoting a replacement publishes the clone plus rebuilt rows in one call 
   assert.equal(await source.promoteWith(candidate, publish), true);
   assert.equal(batches.length, 1);
   assert.deepEqual(
-    new Map(batches[0] as [string, Doc[]][]),
+    new Map(batches[0] as [string, RevisionEnvelope<Doc>[]][]),
     new Map([
-      [KEY_L1, [{ body: "like" }]],
-      ["chat\u0000messages\u0000m9", [{ body: "rebuilt" }]],
+      [KEY_L1, [LIKE_L1]],
+      ["chat\u0000messages\u0000m9", [rebuilt("rebuilt")]],
     ]),
   );
   assert.equal(
@@ -843,7 +877,7 @@ test("live CDC: overlapping applyGroup calls are serialized, so a held-open olde
   assert.equal((await second).status, "applied");
   assert.deepEqual(published, ["v20", "v30"]);
   assert.deepEqual(
-    source.currentSnapshot.get(KEY_M1),
+    docsAt(source, KEY_M1),
     [{ body: "v30" }],
     "the newer group wins",
   );
@@ -922,7 +956,7 @@ test("a generation superseded while its publish is in flight is dropped and coun
     assert.equal(result.status, "late-generation-dropped");
     assert.equal(source.lateEventDropCount, before + 1);
     assert.deepEqual(
-      source.currentSnapshot.get(KEY_M1),
+      docsAt(source, KEY_M1),
       [{ body: "hi" }],
       "the superseded group never reaches the live snapshot",
     );
