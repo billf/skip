@@ -8,13 +8,13 @@
  */
 
 export type PublicationState =
-	| "not-yet-loaded"
-	| "frozen"
-	| "blank"
-	| "current"
-	| "comparison-ready"
-	| "removed"
-	| "terminal";
+  | "not-yet-loaded"
+  | "frozen"
+  | "blank"
+  | "current"
+  | "comparison-ready"
+  | "removed"
+  | "terminal";
 
 /** States a snapshot-path baseline fault is ever allowed to expect (never a partial `current`). */
 export type BaselineExpectedState = "not-yet-loaded" | "frozen" | "blank";

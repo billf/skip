@@ -14,14 +14,18 @@
  */
 
 export type NativeReadResult = {
-	/** The reading client's transition timestamp when this one-shot read returned. */
-	readonly version: number;
-	readonly value: unknown;
+  /** The reading client's transition timestamp when this one-shot read returned. */
+  readonly version: number;
+  readonly value: unknown;
 };
 
 export type NativeReadAdmission =
-	| { readonly kind: "admitted"; readonly version: number; readonly value: unknown }
-	| { readonly kind: "incomparable"; readonly reason: string };
+  | {
+      readonly kind: "admitted";
+      readonly version: number;
+      readonly value: unknown;
+    }
+  | { readonly kind: "incomparable"; readonly reason: string };
 
 /**
  * A sample is admitted only when its version is at or past `targetVersion`
@@ -30,30 +34,33 @@ export type NativeReadAdmission =
  * Skip mismatch.
  */
 export function admitNativeSample(
-	read: NativeReadResult,
-	targetVersion: number,
-	latestMutationCommitBeforeReadReturned: number | undefined,
+  read: NativeReadResult,
+  targetVersion: number,
+  latestMutationCommitBeforeReadReturned: number | undefined,
 ): NativeReadAdmission {
-	if (read.version < targetVersion) {
-		return {
-			kind: "incomparable",
-			reason: `native read version ${read.version} precedes target version ${targetVersion}`,
-		};
-	}
-	if (latestMutationCommitBeforeReadReturned !== undefined && latestMutationCommitBeforeReadReturned > targetVersion) {
-		return {
-			kind: "incomparable",
-			reason:
-				`a mutation committed at ${latestMutationCommitBeforeReadReturned}, after the target ` +
-				`mutation, before the native read returned`,
-		};
-	}
-	return { kind: "admitted", version: read.version, value: read.value };
+  if (read.version < targetVersion) {
+    return {
+      kind: "incomparable",
+      reason: `native read version ${read.version} precedes target version ${targetVersion}`,
+    };
+  }
+  if (
+    latestMutationCommitBeforeReadReturned !== undefined &&
+    latestMutationCommitBeforeReadReturned > targetVersion
+  ) {
+    return {
+      kind: "incomparable",
+      reason:
+        `a mutation committed at ${latestMutationCommitBeforeReadReturned}, after the target ` +
+        `mutation, before the native read returned`,
+    };
+  }
+  return { kind: "admitted", version: read.version, value: read.value };
 }
 
 /** A caller-supplied one-shot read, decoupled from any particular Convex client wiring. */
 export type OneShotReader = {
-	read(): Promise<NativeReadResult>;
+  read(): Promise<NativeReadResult>;
 };
 
 /**
@@ -72,13 +79,13 @@ export type OneShotReader = {
  * getter -- not a pre-bound number -- is the only accepted shape.
  */
 export class NativeReader {
-	constructor(private readonly reader: OneShotReader) {}
+  constructor(private readonly reader: OneShotReader) {}
 
-	async sampleAtOrPast(
-		targetVersion: number,
-		getLatestMutationCommit: () => number | undefined,
-	): Promise<NativeReadAdmission> {
-		const result = await this.reader.read();
-		return admitNativeSample(result, targetVersion, getLatestMutationCommit());
-	}
+  async sampleAtOrPast(
+    targetVersion: number,
+    getLatestMutationCommit: () => number | undefined,
+  ): Promise<NativeReadAdmission> {
+    const result = await this.reader.read();
+    return admitNativeSample(result, targetVersion, getLatestMutationCommit());
+  }
 }

@@ -8,5 +8,5 @@ import { test } from "node:test";
 // suite collects this test, the quoted recursive pattern is being
 // resolved by the runner itself at every depth.
 test("runner-resolved glob collects tests nested two-plus levels deep", () => {
-	assert.equal(1 + 1, 2);
+  assert.equal(1 + 1, 2);
 });

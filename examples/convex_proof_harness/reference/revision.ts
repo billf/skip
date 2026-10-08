@@ -32,7 +32,11 @@
  */
 
 import type { Entry, ExternalService, Json } from "@skipruntime/core";
-import { RevisionDeltaSource, type GenerationId, type RevisionDeltaEntry } from "@skip-adapter/atomic-batch";
+import {
+  RevisionDeltaSource,
+  type GenerationId,
+  type RevisionDeltaEntry,
+} from "@skip-adapter/atomic-batch";
 import { CheckpointEmitter } from "../src/checkpoint.js";
 import { HarnessError } from "../src/readiness.js";
 import { ALL_SELECTED_ROWS_RESOURCE, SOURCE_COMPONENT } from "./service.js";
@@ -41,122 +45,141 @@ export { ALL_SELECTED_ROWS_RESOURCE as REVISION_RESOURCE } from "./service.js";
 
 /** One scripted row: a table tag plus a document already carrying `_id`/`_creationTime`, matching room_feed.ts's per-table doc shapes. */
 export type ScriptedRow = {
-	readonly table: string;
-	readonly _id: string;
-	readonly _creationTime: number;
-	readonly doc: Json;
+  readonly table: string;
+  readonly _id: string;
+  readonly _creationTime: number;
+  readonly doc: Json;
 };
 
 /** One page/group: rows sharing one exact `ts`, applied together and completed as a unit. */
 export type RevisionGroup = {
-	readonly ts: number;
-	readonly rows: readonly ScriptedRow[];
+  readonly ts: number;
+  readonly rows: readonly ScriptedRow[];
 };
 
 type Subscriber = {
-	readonly update: (entries: Entry<Json, Json>[], isInit: boolean) => Promise<void>;
-	readonly error: (error: unknown) => void;
+  readonly update: (
+    entries: Entry<Json, Json>[],
+    isInit: boolean,
+  ) => Promise<void>;
+  readonly error: (error: unknown) => void;
 };
 
 export class RevisionDeltaReferenceSource implements ExternalService {
-	private readonly deltaSource = new RevisionDeltaSource<Json>();
-	private readonly generationId: GenerationId;
-	private subscriber: Subscriber | undefined;
-	private groupCounter = 0;
+  private readonly deltaSource = new RevisionDeltaSource<Json>();
+  private readonly generationId: GenerationId;
+  private subscriber: Subscriber | undefined;
+  private groupCounter = 0;
 
-	constructor(private readonly checkpointEmitter: CheckpointEmitter) {
-		this.generationId = this.deltaSource.beginGeneration();
-	}
+  constructor(private readonly checkpointEmitter: CheckpointEmitter) {
+    this.generationId = this.deltaSource.beginGeneration();
+  }
 
-	async subscribe(
-		instance: string,
-		resource: string,
-		_params: Json,
-		callbacks: Subscriber,
-	): Promise<void> {
-		if (resource !== ALL_SELECTED_ROWS_RESOURCE) {
-			throw new HarnessError(`RevisionDeltaReferenceSource: unknown resource "${resource}" (expected "${ALL_SELECTED_ROWS_RESOURCE}")`);
-		}
-		if (this.subscriber !== undefined) {
-			throw new HarnessError(`RevisionDeltaReferenceSource: instance "${instance}" is already subscribed`);
-		}
-		this.subscriber = callbacks;
-		// Starts empty; every row this run cares about arrives through a
-		// later `applyGroup` call, not an initial snapshot.
-		await callbacks.update([], true);
-	}
+  async subscribe(
+    instance: string,
+    resource: string,
+    _params: Json,
+    callbacks: Subscriber,
+  ): Promise<void> {
+    if (resource !== ALL_SELECTED_ROWS_RESOURCE) {
+      throw new HarnessError(
+        `RevisionDeltaReferenceSource: unknown resource "${resource}" (expected "${ALL_SELECTED_ROWS_RESOURCE}")`,
+      );
+    }
+    if (this.subscriber !== undefined) {
+      throw new HarnessError(
+        `RevisionDeltaReferenceSource: instance "${instance}" is already subscribed`,
+      );
+    }
+    this.subscriber = callbacks;
+    // Starts empty; every row this run cares about arrives through a
+    // later `applyGroup` call, not an initial snapshot.
+    await callbacks.update([], true);
+  }
 
-	unsubscribe(_instance: string): void {
-		this.subscriber = undefined;
-	}
+  unsubscribe(_instance: string): void {
+    this.subscriber = undefined;
+  }
 
-	async shutdown(): Promise<void> {
-		this.subscriber = undefined;
-	}
+  async shutdown(): Promise<void> {
+    this.subscriber = undefined;
+  }
 
-	/**
-	 * Applies one group's rows as one page (P9's per-page ledger, one
-	 * group id) and pushes every newly-applied change to the subscriber
-	 * in a SINGLE `update()` call once the whole group has landed -- an
-	 * atomic group must reach the SSE consumer as one event, not one per
-	 * row, or every group (not just a seeded split) would look torn. A
-	 * caller that wants to prove a seeded split IS torn achieves that by
-	 * calling `applyGroup` twice, once per logical write, each with its
-	 * own independent `update()` push. Marks the group complete and
-	 * emits this run's checkpoint for `group.ts` once every row has been
-	 * applied (or ignored as a replay).
-	 */
-	async applyGroup(group: RevisionGroup): Promise<{ replayedIgnored: number }> {
-		if (this.subscriber === undefined) {
-			throw new HarnessError("RevisionDeltaReferenceSource: applyGroup called before subscribe");
-		}
-		const groupId = `group-${this.groupCounter++}`;
-		const ledger = this.deltaSource.beginPage(this.generationId, [groupId]);
-		if (ledger === undefined) {
-			throw new HarnessError("RevisionDeltaReferenceSource: stale generation (beginPage refused)");
-		}
-		let ignored = 0;
-		const changes: Entry<Json, Json>[] = [];
-		for (const row of group.rows) {
-			const entry: RevisionDeltaEntry<Json> = {
-				ts: String(group.ts),
-				deleted: false,
-				component: SOURCE_COMPONENT,
-				table: row.table,
-				_id: row._id,
-				_creationTime: row._creationTime,
-				doc: row.doc,
-			};
-			const result = this.deltaSource.applyEntry(this.generationId, entry);
-			if (result.status === "replay-ignored") {
-				ignored += 1;
-				continue;
-			}
-			if (result.status === "late-generation-dropped") {
-				throw new HarnessError(`RevisionDeltaReferenceSource: entry for "${row.table}/${row._id}" dropped as a late generation`);
-			}
-			// `RevisionDeltaApplier.apply`'s returned `change` value is the
-			// bare doc (`[key, [doc]]`) -- that's the P2 shape 1c's own
-			// data-sync consumer wants, but `SplitByTable` (split.ts) needs
-			// the full envelope (`ts`/`deleted`/`component`/`table`/`_id`/
-			// `_creationTime`/`doc`) as the published value to route by
-			// table via its `isRevisionEnvelope` discrimination. Publish
-			// `entry` itself (structurally a `RevisionEnvelope`), keyed by
-			// the applier's own retention key, not `result.change`'s bare
-			// doc.
-			changes.push([result.change[0], [entry]] as Entry<Json, Json>);
-		}
-		const marked = this.deltaSource.markGroupComplete(this.generationId, ledger, groupId);
-		if (!marked) {
-			throw new HarnessError(`RevisionDeltaReferenceSource: group "${groupId}" was dropped as a late generation`);
-		}
-		if (changes.length > 0) await this.subscriber.update(changes, false);
-		this.checkpointEmitter.checkpoint(group.ts);
-		return { replayedIgnored: ignored };
-	}
+  /**
+   * Applies one group's rows as one page (P9's per-page ledger, one
+   * group id) and pushes every newly-applied change to the subscriber
+   * in a SINGLE `update()` call once the whole group has landed -- an
+   * atomic group must reach the SSE consumer as one event, not one per
+   * row, or every group (not just a seeded split) would look torn. A
+   * caller that wants to prove a seeded split IS torn achieves that by
+   * calling `applyGroup` twice, once per logical write, each with its
+   * own independent `update()` push. Marks the group complete and
+   * emits this run's checkpoint for `group.ts` once every row has been
+   * applied (or ignored as a replay).
+   */
+  async applyGroup(group: RevisionGroup): Promise<{ replayedIgnored: number }> {
+    if (this.subscriber === undefined) {
+      throw new HarnessError(
+        "RevisionDeltaReferenceSource: applyGroup called before subscribe",
+      );
+    }
+    const groupId = `group-${this.groupCounter++}`;
+    const ledger = this.deltaSource.beginPage(this.generationId, [groupId]);
+    if (ledger === undefined) {
+      throw new HarnessError(
+        "RevisionDeltaReferenceSource: stale generation (beginPage refused)",
+      );
+    }
+    let ignored = 0;
+    const changes: Entry<Json, Json>[] = [];
+    for (const row of group.rows) {
+      const entry: RevisionDeltaEntry<Json> = {
+        ts: String(group.ts),
+        deleted: false,
+        component: SOURCE_COMPONENT,
+        table: row.table,
+        _id: row._id,
+        _creationTime: row._creationTime,
+        doc: row.doc,
+      };
+      const result = this.deltaSource.applyEntry(this.generationId, entry);
+      if (result.status === "replay-ignored") {
+        ignored += 1;
+        continue;
+      }
+      if (result.status === "late-generation-dropped") {
+        throw new HarnessError(
+          `RevisionDeltaReferenceSource: entry for "${row.table}/${row._id}" dropped as a late generation`,
+        );
+      }
+      // `RevisionDeltaApplier.apply`'s returned `change` value is the
+      // bare doc (`[key, [doc]]`) -- that's the P2 shape 1c's own
+      // data-sync consumer wants, but `SplitByTable` (split.ts) needs
+      // the full envelope (`ts`/`deleted`/`component`/`table`/`_id`/
+      // `_creationTime`/`doc`) as the published value to route by
+      // table via its `isRevisionEnvelope` discrimination. Publish
+      // `entry` itself (structurally a `RevisionEnvelope`), keyed by
+      // the applier's own retention key, not `result.change`'s bare
+      // doc.
+      changes.push([result.change[0], [entry]] as Entry<Json, Json>);
+    }
+    const marked = this.deltaSource.markGroupComplete(
+      this.generationId,
+      ledger,
+      groupId,
+    );
+    if (!marked) {
+      throw new HarnessError(
+        `RevisionDeltaReferenceSource: group "${groupId}" was dropped as a late generation`,
+      );
+    }
+    if (changes.length > 0) await this.subscriber.update(changes, false);
+    this.checkpointEmitter.checkpoint(group.ts);
+    return { replayedIgnored: ignored };
+  }
 
-	/** F2's replay-idempotency counter (`RevisionDeltaApplier.replayedIgnored`), scoped to this source's one live generation. */
-	get replayedIgnored(): number {
-		return this.deltaSource.replayedIgnored(this.generationId);
-	}
+  /** F2's replay-idempotency counter (`RevisionDeltaApplier.replayedIgnored`), scoped to this source's one live generation. */
+  get replayedIgnored(): number {
+    return this.deltaSource.replayedIgnored(this.generationId);
+  }
 }

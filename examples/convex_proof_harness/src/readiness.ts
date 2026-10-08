@@ -7,10 +7,10 @@
  */
 
 export class HarnessError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "HarnessError";
-	}
+  constructor(message: string) {
+    super(message);
+    this.name = "HarnessError";
+  }
 }
 
 export type Discipline = "quiesced" | "revision-tagged";
@@ -26,8 +26,13 @@ export type Discipline = "quiesced" | "revision-tagged";
  * ack the harness's `fixture:marker` mutation returned.
  */
 export type Gate1Event =
-	| { readonly kind: "source-version"; readonly ts: number }
-	| { readonly kind: "source-marker"; readonly ackSeq: number; readonly observedSeq: number; readonly ts: number };
+  | { readonly kind: "source-version"; readonly ts: number }
+  | {
+      readonly kind: "source-marker";
+      readonly ackSeq: number;
+      readonly observedSeq: number;
+      readonly ts: number;
+    };
 
 /**
  * The caller-supplied version stream gate 2 watches. Heartbeats and empty
@@ -36,9 +41,9 @@ export type Gate1Event =
  * inspected for its carried version) can.
  */
 export type Gate2Event =
-	| { readonly kind: "heartbeat" }
-	| { readonly kind: "empty-update" }
-	| { readonly kind: "checkpoint"; readonly version: number };
+  | { readonly kind: "heartbeat" }
+  | { readonly kind: "empty-update" }
+  | { readonly kind: "checkpoint"; readonly version: number };
 
 /**
  * Owns gates 1 and 2 for one required version, under one discipline.
@@ -51,55 +56,64 @@ export type Gate2Event =
  * already been seen is ignored rather than regressing gate 2.
  */
 export class ReadinessDetector {
-	private gate1Version: number | undefined;
-	private gate2Version: number | undefined;
-	private highestRevisionSeen: number | undefined;
+  private gate1Version: number | undefined;
+  private gate2Version: number | undefined;
+  private highestRevisionSeen: number | undefined;
 
-	constructor(
-		private readonly discipline: Discipline,
-		private readonly requiredVersion: number,
-	) {}
+  constructor(
+    private readonly discipline: Discipline,
+    private readonly requiredVersion: number,
+  ) {}
 
-	/** Gate 1: source group applied. */
-	observeGate1(event: Gate1Event): void {
-		if (this.gate1Version !== undefined) return;
-		if (event.kind === "source-version") {
-			if (event.ts >= this.requiredVersion) this.gate1Version = event.ts;
-			return;
-		}
-		if (event.observedSeq >= event.ackSeq) this.gate1Version = event.ts;
-	}
+  /** Gate 1: source group applied. */
+  observeGate1(event: Gate1Event): void {
+    if (this.gate1Version !== undefined) return;
+    if (event.kind === "source-version") {
+      if (event.ts >= this.requiredVersion) this.gate1Version = event.ts;
+      return;
+    }
+    if (event.observedSeq >= event.ackSeq) this.gate1Version = event.ts;
+  }
 
-	/** Gate 2: derived result published. */
-	observeGate2(event: Gate2Event): void {
-		if (event.kind !== "checkpoint") return;
-		if (this.discipline === "revision-tagged") {
-			if (this.highestRevisionSeen !== undefined && event.version <= this.highestRevisionSeen) {
-				return;
-			}
-			this.highestRevisionSeen = event.version;
-			if (this.gate2Version === undefined && event.version === this.requiredVersion) {
-				this.gate2Version = event.version;
-			}
-			return;
-		}
-		if (this.gate2Version === undefined && event.version >= this.requiredVersion) {
-			this.gate2Version = event.version;
-		}
-	}
+  /** Gate 2: derived result published. */
+  observeGate2(event: Gate2Event): void {
+    if (event.kind !== "checkpoint") return;
+    if (this.discipline === "revision-tagged") {
+      if (
+        this.highestRevisionSeen !== undefined &&
+        event.version <= this.highestRevisionSeen
+      ) {
+        return;
+      }
+      this.highestRevisionSeen = event.version;
+      if (
+        this.gate2Version === undefined &&
+        event.version === this.requiredVersion
+      ) {
+        this.gate2Version = event.version;
+      }
+      return;
+    }
+    if (
+      this.gate2Version === undefined &&
+      event.version >= this.requiredVersion
+    ) {
+      this.gate2Version = event.version;
+    }
+  }
 
-	get gate1(): boolean {
-		return this.gate1Version !== undefined;
-	}
+  get gate1(): boolean {
+    return this.gate1Version !== undefined;
+  }
 
-	get gate2(): boolean {
-		return this.gate2Version !== undefined;
-	}
+  get gate2(): boolean {
+    return this.gate2Version !== undefined;
+  }
 
-	/** The version gate 2 settled at, once reached. */
-	get publishedVersion(): number | undefined {
-		return this.gate2Version;
-	}
+  /** The version gate 2 settled at, once reached. */
+  get publishedVersion(): number | undefined {
+    return this.gate2Version;
+  }
 }
 
 /**
@@ -109,15 +123,15 @@ export class ReadinessDetector {
  * gates 1-3; `ReadinessDetector` itself never reads the oracle.
  */
 export class QuiescedWriteCoordinator {
-	private gate3Reached = false;
+  private gate3Reached = false;
 
-	constructor(private readonly readiness: ReadinessDetector) {}
+  constructor(private readonly readiness: ReadinessDetector) {}
 
-	reportGate3FromQ2(): void {
-		this.gate3Reached = true;
-	}
+  reportGate3FromQ2(): void {
+    this.gate3Reached = true;
+  }
 
-	get writesHeld(): boolean {
-		return !(this.readiness.gate1 && this.readiness.gate2 && this.gate3Reached);
-	}
+  get writesHeld(): boolean {
+    return !(this.readiness.gate1 && this.readiness.gate2 && this.gate3Reached);
+  }
 }

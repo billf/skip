@@ -82,7 +82,13 @@ function mappableSource(
 }
 
 const noContext = {} as Context;
-const KNOWN_TABLES = new Set(["rooms", "users", "memberships", "messages", "likes"]);
+const KNOWN_TABLES = new Set([
+  "rooms",
+  "users",
+  "memberships",
+  "messages",
+  "likes",
+]);
 
 test("split mapper routes each row of a real multi-row snapshot entry to its table, keyed <component>/<table>/<id>", () => {
   const mapper = new SplitByTable("room-feed", KNOWN_TABLES);
@@ -98,7 +104,11 @@ test("split mapper routes each row of a real multi-row snapshot entry to its tab
     ],
   ]);
   const out = [
-    ...mapper.mapEntry(entry![0], multiValues(entry![1] as TaggedRow[]), noContext),
+    ...mapper.mapEntry(
+      entry![0],
+      multiValues(entry![1] as TaggedRow[]),
+      noContext,
+    ),
   ];
   assert.deepEqual(out, [
     ["room-feed/messages/m1", { _id: "m1", body: "hi" }],
@@ -119,13 +129,19 @@ test("marker rows are routed to the control collection regardless of the request
   const mapper = new SplitByTable("room-feed", KNOWN_TABLES);
   const rows: TaggedRow[] = [{ table: MARKER_TABLE, doc: { _id: "seq" } }];
   const out = [...mapper.mapEntry("markers", multiValues(rows), noContext)];
-  assert.deepEqual(out, [[`${CONTROL_COMPONENT}/${MARKER_TABLE}/seq`, { _id: "seq" }]]);
+  assert.deepEqual(out, [
+    [`${CONTROL_COMPONENT}/${MARKER_TABLE}/seq`, { _id: "seq" }],
+  ]);
 });
 
 test("a revision-delta envelope with the same rows produces the same per-table collections as the equivalent snapshot array", () => {
   const snapshotMapper = new SplitByTable("room-feed", KNOWN_TABLES);
-  const snapshotRows: TaggedRow[] = [{ table: "messages", doc: { _id: "m1", body: "hi" } }];
-  const fromSnapshot = [...snapshotMapper.mapEntry("q1", multiValues(snapshotRows), noContext)];
+  const snapshotRows: TaggedRow[] = [
+    { table: "messages", doc: { _id: "m1", body: "hi" } },
+  ];
+  const fromSnapshot = [
+    ...snapshotMapper.mapEntry("q1", multiValues(snapshotRows), noContext),
+  ];
 
   const revisionMapper = new SplitByTable("room-feed", KNOWN_TABLES);
   const envelope: RevisionEnvelope = {
@@ -137,7 +153,9 @@ test("a revision-delta envelope with the same rows produces the same per-table c
     _creationTime: 100,
     doc: { _id: "m1", body: "hi" },
   };
-  const fromRevision = [...revisionMapper.mapEntry("m1", multiValues([envelope]), noContext)];
+  const fromRevision = [
+    ...revisionMapper.mapEntry("m1", multiValues([envelope]), noContext),
+  ];
 
   assert.deepEqual(fromSnapshot, fromRevision);
 });

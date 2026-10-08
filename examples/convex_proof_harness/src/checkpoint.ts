@@ -13,7 +13,7 @@ export type CheckpointSink = (frame: string) => void;
 
 /** Formats one `event: checkpoint` SSE frame carrying `version`. */
 export function formatCheckpointFrame(version: number): string {
-	return `event: checkpoint\ndata: ${JSON.stringify({ version })}\n\n`;
+  return `event: checkpoint\ndata: ${JSON.stringify({ version })}\n\n`;
 }
 
 /**
@@ -28,31 +28,36 @@ export function formatCheckpointFrame(version: number): string {
  * remove the dead sink) and the loop continues with the remaining sinks.
  */
 export class CheckpointEmitter {
-	private readonly sinks = new Set<CheckpointSink>();
+  private readonly sinks = new Set<CheckpointSink>();
 
-	constructor(private readonly onSinkError: (sink: CheckpointSink, error: unknown) => void = () => {}) {}
+  constructor(
+    private readonly onSinkError: (
+      sink: CheckpointSink,
+      error: unknown,
+    ) => void = () => {},
+  ) {}
 
-	addSink(sink: CheckpointSink): void {
-		this.sinks.add(sink);
-	}
+  addSink(sink: CheckpointSink): void {
+    this.sinks.add(sink);
+  }
 
-	removeSink(sink: CheckpointSink): void {
-		this.sinks.delete(sink);
-	}
+  removeSink(sink: CheckpointSink): void {
+    this.sinks.delete(sink);
+  }
 
-	get sinkCount(): number {
-		return this.sinks.size;
-	}
+  get sinkCount(): number {
+    return this.sinks.size;
+  }
 
-	/** Writes `event: checkpoint` carrying `version` to every open stream. */
-	checkpoint(version: number): void {
-		const frame = formatCheckpointFrame(version);
-		for (const sink of this.sinks) {
-			try {
-				sink(frame);
-			} catch (error) {
-				this.onSinkError(sink, error);
-			}
-		}
-	}
+  /** Writes `event: checkpoint` carrying `version` to every open stream. */
+  checkpoint(version: number): void {
+    const frame = formatCheckpointFrame(version);
+    for (const sink of this.sinks) {
+      try {
+        sink(frame);
+      } catch (error) {
+        this.onSinkError(sink, error);
+      }
+    }
+  }
 }

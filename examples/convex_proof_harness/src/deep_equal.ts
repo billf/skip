@@ -11,13 +11,17 @@
  * flat JSON shapes in scope; revisit if nested or exotic shapes arrive.
  */
 export function deepEqual(a: unknown, b: unknown): boolean {
-	if (a === b) return true;
-	if (a === null || b === null || a === undefined || b === undefined) return false;
-	if (typeof a !== "object" || typeof b !== "object") return false;
-	const aKeys = Object.keys(a as Record<string, unknown>);
-	const bKeys = Object.keys(b as Record<string, unknown>);
-	if (aKeys.length !== bKeys.length) return false;
-	return aKeys.every((k) =>
-		deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
-	);
+  if (a === b) return true;
+  if (a === null || b === null || a === undefined || b === undefined)
+    return false;
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bKeys = Object.keys(b as Record<string, unknown>);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k) =>
+    deepEqual(
+      (a as Record<string, unknown>)[k],
+      (b as Record<string, unknown>)[k],
+    ),
+  );
 }
