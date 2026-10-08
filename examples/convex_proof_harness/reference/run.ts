@@ -180,7 +180,15 @@ async function runLoader(
       timeout: 120_000,
     },
   );
-  return JSON.parse(stdout) as Record<string, string>;
+  try {
+    return JSON.parse(stdout) as Record<string, string>;
+  } catch (error) {
+    // A loader that prints anything but pure JSON (tsx warnings, CLI
+    // notices) would otherwise die with an unattributed SyntaxError.
+    throw new HarnessError(
+      `run.ts: loader for ${vectorId} did not print valid JSON (${error instanceof Error ? error.message : String(error)}); stdout began: ${JSON.stringify(stdout.slice(0, 200))}`,
+    );
+  }
 }
 
 async function runFixtureReset(target: ImportTarget): Promise<void> {
