@@ -4,29 +4,14 @@
  */
 
 import type { Context, Json, Mapper, Values } from "@skipruntime/core";
+import { isRevisionEnvelope, type RevisionEnvelope } from "./envelope.js";
 import { namespacedKey } from "./keys.js";
+
+export type { RevisionEnvelope };
 
 /** One row of a `SnapshotBatch` query's value list, tagged with its table. */
 export type TaggedRow = {
   readonly table: string;
-  readonly doc: Json;
-};
-
-/**
- * One row of a `RevisionDeltaBatch`, carrying its own table tag and tombstone flag.
- *
- * Known divergence: `RevisionDeltaEntry` (revision_delta.ts) describes the same wire shape with `ts: string | bigint`
- * and a nullable `doc`, and `RevisionDeltaSource.applyGroup` publishes bare docs rather than this envelope. Both are
- * pending a decision; see "Open decision: the revision envelope on the live path" in SPEC.md. Do not feed
- * `applyGroup`'s publish payload to `SplitByTable`.
- */
-export type RevisionEnvelope = {
-  readonly ts: string | number;
-  readonly deleted: boolean;
-  readonly component: string;
-  readonly table: string;
-  readonly _id: string;
-  readonly _creationTime: number;
   readonly doc: Json;
 };
 
@@ -48,17 +33,6 @@ function docId(table: string, key: string, doc: Json): string {
   throw new Error(
     `split: table "${table}" key "${key}" has a row missing a string _id`,
   );
-}
-
-/**
- * True when a split-input value is a `RevisionDeltaBatch` envelope rather
- * than a snapshot `TaggedRow`. The envelope's `deleted`/`ts` fields are
- * absent from `TaggedRow`, so their joint presence discriminates the union.
- */
-function isRevisionEnvelope(
-  value: TaggedRow | RevisionEnvelope,
-): value is RevisionEnvelope {
-  return "deleted" in value && "ts" in value;
 }
 
 /**
@@ -107,15 +81,14 @@ export class SplitByTable
       if (!isMarker && !this.knownTables.has(value.table)) {
         throw new Error(`split: unknown table "${value.table}"`);
       }
+      // A tombstone envelope removes the row; the discriminated union makes `doc` non-null past this point.
       if (envelope?.deleted) continue;
+      const doc: Json =
+        envelope === null ? (value as TaggedRow).doc : envelope.doc;
       const component = isMarker ? CONTROL_COMPONENT : this.component;
       out.push([
-        namespacedKey(
-          component,
-          value.table,
-          docId(value.table, _key, value.doc),
-        ),
-        value.doc,
+        namespacedKey(component, value.table, docId(value.table, _key, doc)),
+        doc,
       ]);
     }
     return out;

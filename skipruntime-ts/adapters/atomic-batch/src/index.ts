@@ -35,9 +35,19 @@ export {
   CONTROL_COMPONENT,
   MARKER_TABLE,
   SplitByTable,
-  type RevisionEnvelope,
   type TaggedRow,
 } from "./split.js";
+export {
+  envelopeDoc,
+  isRevisionEnvelope,
+  toEnvelope,
+  unwrapEntry,
+  type EnvelopeDoc,
+  type Revision,
+  type RevisionChange,
+  type RevisionEnvelope,
+  type RevisionTs,
+} from "./envelope.js";
 export {
   ActiveMembershipsByRoomUser,
   ById,
